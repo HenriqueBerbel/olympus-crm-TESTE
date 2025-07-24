@@ -1,10 +1,14 @@
-import React, { useState, createContext, useContext, useEffect, useRef, forwardRef, memo, useMemo } from 'react';
+import React, { useState, createContext, useContext, useEffect, useRef, forwardRef, memo, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut, updatePassword, EmailAuthProvider, reauthenticateWithCredential, deleteUser as deleteFirebaseAuthUser } from "firebase/auth";
 import { getFirestore, collection, onSnapshot, addDoc, doc, setDoc, updateDoc, deleteDoc, writeBatch, query, orderBy, where, getDocs, serverTimestamp, arrayUnion, arrayRemove } from "firebase/firestore";
 import { db, auth } from './firebase.js';
 
 // --- ÍCONES E UTILITÁRIOS ---
+
+const PaletteIcon = memo((props) => <IconWrapper {...props}><circle cx="12" cy="12" r="10"></circle><path d="M12 2a10 10 0 1 0 10 10"></path><path d="M12 12a5 5 0 1 0 5 5"></path><path d="M12 12a5 5 0 1 1 5-5"></path></IconWrapper>);
+const GripVerticalIcon = memo((props) => <IconWrapper {...props}><circle cx="9" cy="12" r="1"></circle><circle cx="9" cy="5" r="1"></circle><circle cx="9" cy="19" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="15" cy="5" r="1"></circle><circle cx="15" cy="19" r="1"></circle></IconWrapper>);
+const PercentIcon = memo((props) => <IconWrapper {...props}><line x1="19" y1="5" x2="5" y2="19"></line><circle cx="6.5" cy="6.5" r="2.5"></circle><circle cx="17.5" cy="17.5" r="2.5"></circle></IconWrapper>);
 const IconWrapper = memo((props) => <svg {...props} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />);
 const HomeIcon = memo((props) => <IconWrapper {...props}><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></IconWrapper>);
 const UsersIcon = memo((props) => <IconWrapper {...props}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></IconWrapper>);
@@ -57,20 +61,17 @@ const formatCurrency = (value) => `R$ ${new Intl.NumberFormat('pt-BR', { minimum
 // --- SISTEMA DE LOGS DETALHADOS ---
 const fieldNameMap = {
     status: 'Status',
-    clientType: 'Tipo de Pessoa',
+    clientType: 'Tipo de Contrato',
     companyName: 'Nome da Empresa',
     cnpj: 'CNPJ',
     responsibleName: 'Nome do Responsável',
     responsibleCpf: 'CPF do Responsável',
-    holderName: 'Nome do Titular',
-    holderCpf: 'CPF do Titular',
-    email: 'E-mail',
-    phone: 'Telefone (Cliente)',
-    contactName: 'Nome do Contato (Recados)',
-    contactPhone: 'Telefone (Contato)',
-    dob: 'Data de Nascimento',
-    weight: 'Peso',
-    height: 'Altura',
+    responsibleStatus: 'Responsável',
+    holderCpf: 'Telefone Responsável',
+    email: 'Email Responsável',
+    phone: 'Nome do Contato',
+    contactRole: 'Cargo do Contato',
+    contactPhone: 'Telefone do Contato',
     name: 'Nome',
     company: 'Empresa',
     notes: 'Observações',
@@ -115,7 +116,67 @@ const AuthProvider = ({ children }) => { const [user, setUser] = useState(null);
 const useAuth = () => useContext(AuthContext);
 
 const DataContext = createContext();
-const DataProvider = ({ children }) => { const { user } = useAuth(); const [data, setData] = useState({ clients: [], leads: [], tasks: [], users: [], timeline: [], operators: [], companyProfile: {}, loading: true }); const logAction = async (logData) => { if (!db || !user) return; try { await addDoc(collection(db, 'timeline'), { ...logData, userId: user.uid, userName: user.name, userAvatar: user.avatar || null, timestamp: serverTimestamp() }); } catch (error) { console.error("Erro ao registrar log:", error); } }; useEffect(() => { if (!db) { setData(d => ({ ...d, loading: false })); return; } const collections = { clients: 'clients', leads: 'leads', tasks: 'tasks', users: 'users', operators: 'operators', timeline: 'timeline' }; const unsubscribes = Object.entries(collections).map(([stateKey, collectionName]) => { const q = collectionName === 'timeline' ? query(collection(db, collectionName), orderBy('timestamp', 'desc')) : collection(db, collectionName); return onSnapshot(q, (snapshot) => { const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })); setData(prev => ({ ...prev, [stateKey]: items })); }, (error) => console.error(`Erro ao buscar ${collectionName}:`, error)); }); const unsubProfile = onSnapshot(doc(db, 'company_profile', 'main'), (doc) => setData(prev => ({ ...prev, companyProfile: doc.exists() ? doc.data() : {} }))); unsubscribes.push(unsubProfile); const timer = setTimeout(() => setData(d => ({ ...d, loading: false })), 1500); return () => { unsubscribes.forEach(unsub => unsub?.()); clearTimeout(timer); }; }, []); const addClient = async (clientData) => { if(!db) return null; try { const docRef = await addDoc(collection(db, "clients"), { ...clientData, createdAt: serverTimestamp() }); logAction({ actionType: 'CRIAÇÃO', module: 'Clientes', description: `criou o cliente ${clientData.general.holderName}.`, entity: { type: 'Cliente', id: docRef.id, name: clientData.general.holderName }, linkTo: `/clients/${docRef.id}` }); return { id: docRef.id, ...clientData }; } catch (e) { return null; } }; const updateClient = async (clientId, updatedData) => { if (!db) return null; try { const oldClient = data.clients.find(c => c.id === clientId); const changes = generateChangeDescription(oldClient, updatedData, fieldNameMap); const description = changes.length > 0 ? `atualizou o cliente ${updatedData.general?.holderName || 'sem nome'}: ${changes.join(', ')}.` : `visualizou/salvou o cliente ${updatedData.general?.holderName || 'sem nome'} sem alterações.`; const clientRef = doc(db, "clients", clientId); await updateDoc(clientRef, updatedData); logAction({ actionType: 'EDIÇÃO', module: 'Clientes', description: description, entity: { type: 'Cliente', id: clientId, name: updatedData.general?.holderName }, linkTo: `/clients/${clientId}`}); return { id: clientId, ...updatedData }; } catch (e) { return null; } }; const deleteClient = async (clientId, clientName) => { if(!db) return false; try { await deleteDoc(doc(db, "clients", clientId)); logAction({ actionType: 'EXCLUSÃO', module: 'Clientes', description: `excluiu o cliente ${clientName}.`, entity: { type: 'Cliente', id: clientId, name: clientName } }); return true; } catch (e) { return false; } }; const addLead = async (leadData) => { if(!db) return null; try { const docRef = await addDoc(collection(db, "leads"), {...leadData, createdAt: serverTimestamp(), lastActivityDate: serverTimestamp()}); logAction({ actionType: 'CRIAÇÃO', module: 'Leads', description: `criou o lead ${leadData.name}.`, entity: { type: 'Lead', id: docRef.id, name: leadData.name } }); return { id: docRef.id, ...leadData }; } catch (e) { return null; } }; const updateLead = async (leadId, updatedData) => { if (!db) return false; try { const oldLead = data.leads.find(l => l.id === leadId); const changes = generateChangeDescription(oldLead, updatedData, fieldNameMap); const description = changes.length > 0 ? `atualizou o lead ${updatedData.name}: ${changes.join(', ')}.` : `atualizou o lead ${updatedData.name}.`; await updateDoc(doc(db, "leads", leadId), { ...updatedData, lastActivityDate: serverTimestamp() }); logAction({ actionType: 'EDIÇÃO', module: 'Leads', description: description, entity: { type: 'Lead', id: leadId, name: updatedData.name } }); return true; } catch (e) { return false; } }; const deleteLead = async (leadId, leadName) => { if(!db) return false; try { await deleteDoc(doc(db, "leads", leadId)); logAction({ actionType: 'EXCLUSÃO', module: 'Leads', description: `excluiu o lead ${leadName}.`}); return true; } catch (e) { return false; } }; const convertLeadToClient = async (lead) => { return true; }; const addTask = async (taskData) => { if(!db) return null; try { const docRef = await addDoc(collection(db, "tasks"), {...taskData, createdAt: serverTimestamp()}); logAction({ actionType: 'CRIAÇÃO', module: 'Tarefas', description: `criou a tarefa "${taskData.title}".`, entity: { type: 'Tarefa', id: docRef.id, name: taskData.title } }); return { id: docRef.id, ...taskData }; } catch (e) { return null; } }; const updateTask = async (taskId, updatedData) => { if(!db) return false; try { const oldTask = data.tasks.find(t => t.id === taskId); const changes = generateChangeDescription(oldTask, updatedData, fieldNameMap); const description = changes.length > 0 ? `atualizou a tarefa "${updatedData.title}": ${changes.join(', ')}.` : `atualizou a tarefa "${updatedData.title}".`; const dataToUpdate = { ...updatedData }; if (updatedData.status === 'Concluída' && oldTask.status !== 'Concluída') { dataToUpdate.completedAt = serverTimestamp(); } await updateDoc(doc(db, "tasks", taskId), dataToUpdate); logAction({ actionType: 'EDIÇÃO', module: 'Tarefas', description: description }); return true; } catch (e) { return false; } }; const deleteTask = async (taskId, taskTitle) => { if(!db) return false; try { await deleteDoc(doc(db, "tasks", taskId)); logAction({ actionType: 'EXCLUSÃO', module: 'Tarefas', description: `excluiu a tarefa "${taskTitle}".`}); return true; } catch (e) { return false; } }; const addOperator = async (operatorData) => { if(!db) return false; try { await addDoc(collection(db, "operators"), operatorData); logAction({ actionType: 'CRIAÇÃO', module: 'Corporativo', description: `adicionou a operadora ${operatorData.name}.` }); return true; } catch (e) { return false; } }; const deleteOperator = async (operatorId, operatorName) => { if(!db) return false; try { await deleteDoc(doc(db, "operators", operatorId)); logAction({ actionType: 'EXCLUSÃO', module: 'Corporativo', description: `removeu a operadora ${operatorName}.` }); return true; } catch (e) { return false; } }; const updateCompanyProfile = async (data) => { if(!db) return false; try { await setDoc(doc(db, 'company_profile', 'main'), data); logAction({ actionType: 'EDIÇÃO', module: 'Corporativo', description: 'atualizou os dados da empresa.' }); return true; } catch (e) { return false; }}; const value = { ...data, getClientById: (id) => data.clients.find(c => c.id === id), addClient, updateClient, deleteClient, addLead, updateLead, deleteLead, convertLeadToClient, addTask, updateTask, deleteTask, addOperator, deleteOperator, updateCompanyProfile, logAction }; return <DataContext.Provider value={value}>{children}</DataContext.Provider>; };
+const DataProvider = ({ children }) => {
+    const { user } = useAuth();
+    // Garante que todos os arrays comecem como listas vazias
+    const [data, setData] = useState({ clients: [], leads: [], tasks: [], users: [], timeline: [], operators: [], commissions: [], companyProfile: {}, leadColumns: [], taskColumns: [], completedEvents: [], loading: true });
+
+    const logAction = async (logData) => {
+        if (!db || !user) return;
+        try {
+            await addDoc(collection(db, 'timeline'), { ...logData, userId: user.uid, userName: user.name, userAvatar: user.avatar || null, timestamp: serverTimestamp() });
+        } catch (error) { console.error("Erro ao registrar log:", error); }
+    };
+
+    useEffect(() => {
+        if (!db) { setData(d => ({ ...d, loading: false })); return; }
+        const collectionsToFetch = { clients: 'clients', leads: 'leads', tasks: 'tasks', users: 'users', operators: 'operators', timeline: 'timeline', commissions: 'commissions', completedEvents: 'completed_events' };
+        const unsubscribes = Object.entries(collectionsToFetch).map(([stateKey, collectionName]) => {
+            const q = collectionName === 'timeline' ? query(collection(db, collectionName), orderBy('timestamp', 'desc')) : collection(db, collectionName);
+            return onSnapshot(q, (snapshot) => {
+                const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                setData(prev => ({ ...prev, [stateKey]: items }));
+            }, (error) => {
+                console.error(`Erro ao buscar ${collectionName}, definindo como array vazio:`, error);
+                setData(prev => ({...prev, [stateKey]: []})); // Se der erro, garante que seja um array vazio
+            });
+        });
+
+        const unsubLeadCols = onSnapshot(query(collection(db, 'kanban_columns'), where('boardId', '==', 'leads'), orderBy('order')), (snapshot) => setData(prev => ({...prev, leadColumns: snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))})));
+        const unsubTaskCols = onSnapshot(query(collection(db, 'kanban_columns'), where('boardId', '==', 'tasks'), orderBy('order')), (snapshot) => setData(prev => ({...prev, taskColumns: snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))})));
+
+        unsubscribes.push(unsubLeadCols, unsubTaskCols);
+
+        const unsubProfile = onSnapshot(doc(db, 'company_profile', 'main'), (doc) => setData(prev => ({ ...prev, companyProfile: doc.exists() ? doc.data() : {} })));
+        unsubscribes.push(unsubProfile);
+        const timer = setTimeout(() => setData(d => ({ ...d, loading: false })), 2000); // Aumentei um pouco o tempo para garantir
+        return () => { unsubscribes.forEach(unsub => unsub?.()); clearTimeout(timer); };
+    }, []);
+
+    const addClient = async (clientData) => { if(!db) return null; try { const docRef = await addDoc(collection(db, "clients"), { ...clientData, createdAt: serverTimestamp() }); logAction({ actionType: 'CRIAÇÃO', module: 'Clientes', description: `criou o cliente ${clientData.general.holderName}.`, entity: { type: 'Cliente', id: docRef.id, name: clientData.general.holderName }, linkTo: `/clients/${docRef.id}` }); return { id: docRef.id, ...clientData }; } catch (e) { return null; } };
+    const updateClient = async (clientId, updatedData) => { if (!db) return null; try { const oldClient = data.clients.find(c => c.id === clientId); const changes = generateChangeDescription(oldClient, updatedData, fieldNameMap); const description = changes.length > 0 ? `atualizou o cliente ${updatedData.general?.holderName || 'sem nome'}: ${changes.join(', ')}.` : `visualizou/salvou o cliente ${updatedData.general?.holderName || 'sem nome'} sem alterações.`; const clientRef = doc(db, "clients", clientId); await updateDoc(clientRef, updatedData); logAction({ actionType: 'EDIÇÃO', module: 'Clientes', description: description, entity: { type: 'Cliente', id: clientId, name: updatedData.general?.holderName }, linkTo: `/clients/${clientId}`}); return { id: clientId, ...updatedData }; } catch (e) { return null; } };
+    const deleteClient = async (clientId, clientName) => { if(!db) return false; try { await deleteDoc(doc(db, "clients", clientId)); logAction({ actionType: 'EXCLUSÃO', module: 'Clientes', description: `excluiu o cliente ${clientName}.`, entity: { type: 'Cliente', id: clientId, name: clientName } }); return true; } catch (e) { return false; } };
+    const addLead = async (leadData) => { if(!db) return null; try { const docRef = await addDoc(collection(db, "leads"), {...leadData, createdAt: serverTimestamp(), lastActivityDate: serverTimestamp()}); logAction({ actionType: 'CRIAÇÃO', module: 'Leads', description: `criou o lead ${leadData.name}.`, entity: { type: 'Lead', id: docRef.id, name: leadData.name } }); return { id: docRef.id, ...leadData }; } catch (e) { return null; } };
+    const updateLead = async (leadId, updatedData) => { if (!db) return false; try { const oldLead = data.leads.find(l => l.id === leadId); const changes = generateChangeDescription(oldLead, updatedData, fieldNameMap); const description = changes.length > 0 ? `atualizou o lead ${updatedData.name}: ${changes.join(', ')}.` : `atualizou o lead ${updatedData.name}.`; await updateDoc(doc(db, "leads", leadId), { ...updatedData, lastActivityDate: serverTimestamp() }); logAction({ actionType: 'EDIÇÃO', module: 'Leads', description: description, entity: { type: 'Lead', id: leadId, name: updatedData.name } }); return true; } catch (e) { return false; } };
+    const deleteLead = async (leadId, leadName) => { if(!db) return false; try { await deleteDoc(doc(db, "leads", leadId)); logAction({ actionType: 'EXCLUSÃO', module: 'Leads', description: `excluiu o lead ${leadName}.`}); return true; } catch (e) { return false; } };
+    const convertLeadToClient = async (lead) => { return true; };
+    const addTask = async (taskData) => { if(!db) return null; try { const docRef = await addDoc(collection(db, "tasks"), {...taskData, createdAt: serverTimestamp()}); logAction({ actionType: 'CRIAÇÃO', module: 'Tarefas', description: `criou a tarefa "${taskData.title}".`, entity: { type: 'Tarefa', id: docRef.id, name: taskData.title } }); return { id: docRef.id, ...taskData }; } catch (e) { return null; } };
+    const updateTask = async (taskId, updatedData) => { if(!db) return false; try { const oldTask = data.tasks.find(t => t.id === taskId); const changes = generateChangeDescription(oldTask, updatedData, fieldNameMap); const description = changes.length > 0 ? `atualizou a tarefa "${updatedData.title}": ${changes.join(', ')}.` : `atualizou a tarefa "${updatedData.title}".`; const dataToUpdate = { ...updatedData }; if (updatedData.status === 'Concluída' && oldTask.status !== 'Concluída') { dataToUpdate.completedAt = serverTimestamp(); } await updateDoc(doc(db, "tasks", taskId), dataToUpdate); logAction({ actionType: 'EDIÇÃO', module: 'Tarefas', description: description }); return true; } catch (e) { return false; } };
+    const deleteTask = async (taskId, taskTitle) => { if(!db) return false; try { await deleteDoc(doc(db, "tasks", taskId)); logAction({ actionType: 'EXCLUSÃO', module: 'Tarefas', description: `excluiu a tarefa "${taskTitle}".`}); return true; } catch (e) { return false; } };
+    const addOperator = async (operatorData) => { if(!db) return false; try { await addDoc(collection(db, "operators"), operatorData); logAction({ actionType: 'CRIAÇÃO', module: 'Corporativo', description: `adicionou a operadora ${operatorData.name}.` }); return true; } catch (e) { return false; } };
+    const deleteOperator = async (operatorId, operatorName) => { if(!db) return false; try { await deleteDoc(doc(db, "operators", operatorId)); logAction({ actionType: 'EXCLUSÃO', module: 'Corporativo', description: `removeu a operadora ${operatorName}.` }); return true; } catch (e) { return false; } };
+    const updateCompanyProfile = async (data) => { if(!db) return false; try { await setDoc(doc(db, 'company_profile', 'main'), data); logAction({ actionType: 'EDIÇÃO', module: 'Corporativo', description: 'atualizou os dados da empresa.' }); return true; } catch (e) { return false; }};
+    const addCommission = async (commissionData) => { if(!db) return null; try { const docRef = await addDoc(collection(db, "commissions"), { ...commissionData, createdAt: serverTimestamp() }); logAction({ actionType: 'CRIAÇÃO', module: 'Comissões', description: `lançou comissão para ${commissionData.clientName}.` }); return { id: docRef.id, ...commissionData }; } catch (e) { return null; } };
+    const updateCommission = async (commissionId, dataToUpdate) => { if(!db) return false; try { await updateDoc(doc(db, "commissions", commissionId), dataToUpdate); logAction({ actionType: 'EDIÇÃO', module: 'Comissões', description: `atualizou comissão.` }); return true; } catch (e) { return false; } };
+    const deleteCommission = async (commissionId) => { if(!db) return false; try { await deleteDoc(doc(db, "commissions", commissionId)); logAction({ actionType: 'EXCLUSÃO', module: 'Comissões', description: `excluiu comissão.` }); return true; } catch (e) { return false; } };
+    const addKanbanColumn = async (columnData) => { if (!db) return false; try { await addDoc(collection(db, 'kanban_columns'), columnData); return true; } catch (e) { return false; } };
+    const deleteKanbanColumn = async (columnId) => { if (!db) return false; try { await deleteDoc(doc(db, 'kanban_columns', columnId)); return true; } catch (e) { return false; } };
+    const updateKanbanColumnOrder = async (orderedColumns) => { if (!db) return false; try { const batch = writeBatch(db); orderedColumns.forEach((col, index) => { const docRef = doc(db, 'kanban_columns', col.id); batch.update(docRef, { order: index }); }); await batch.commit(); return true; } catch (e) { return false; } };
+    const toggleEventCompletion = async (event, isCompleted) => { if (!db || !user) return false; const eventDocRef = doc(db, 'completed_events', event.id); try { if (isCompleted) { await setDoc(eventDocRef, { eventId: event.id, completedAt: serverTimestamp(), userId: user.uid, title: event.title }); logAction({ actionType: 'CONCLUSÃO', module: 'Calendário', description: `concluiu o evento: "${event.title}"`}); } else { await deleteDoc(eventDocRef); logAction({ actionType: 'REABERTURA', module: 'Calendário', description: `reabriu o evento: "${event.title}"`}); } return true; } catch (e) { return false; } };
+
+    const value = { ...data, getClientById: (id) => data.clients.find(c => c.id === id), addClient, updateClient, deleteClient, addLead, updateLead, deleteLead, convertLeadToClient, addTask, updateTask, deleteTask, addOperator, deleteOperator, updateCompanyProfile, addCommission, updateCommission, deleteCommission, addKanbanColumn, deleteKanbanColumn, updateKanbanColumnOrder, toggleEventCompletion, logAction };
+    return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
+};
 const useData = () => useContext(DataContext);
 
 const NotificationContext = createContext();
@@ -174,19 +235,84 @@ const AvatarFallback = ({ children, ...props }) => <span className="flex h-full 
 
 // --- COMPONENTES DE FORMULÁRIO (CLIENTES) ---
 const FormSection = ({ title, children, cols = 3 }) => (<div className="mb-8"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80 border-b border-gray-200 dark:border-white/10 pb-3 mb-6">{title}</h3><div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-${cols} gap-6`}>{children}</div></div>);
-const GeneralInfoForm = ({ formData, handleChange, errors }) => (<FormSection title="Visão Geral"><div><Label>Status do Cliente</Label><Select name="general.status" value={formData?.general?.status || ''} onChange={handleChange} error={errors?.status}><option>Ativo</option><option>Inativo</option><option>Prospect</option><option>Pendente</option></Select></div><div><Label>Tipo de Pessoa</Label><Select name="general.clientType" value={formData?.general?.clientType || ''} onChange={handleChange} error={errors?.clientType}><option>PME</option><option>Pessoa Física</option><option>Adesão</option></Select></div><div className="lg:col-span-1"><Label>Nome da Empresa / Cliente</Label><Input name="general.companyName" value={formData?.general?.companyName || ''} onChange={handleChange} error={errors?.companyName} /></div>{formData?.general?.clientType === 'PME' && (<><div><Label>CNPJ</Label><Input name="general.cnpj" value={formData?.general?.cnpj || ''} onChange={handleChange} /></div><div><Label>Nome do Responsável</Label><Input name="general.responsibleName" value={formData?.general?.responsibleName || ''} onChange={handleChange} /></div><div><Label>CPF do Responsável</Label><Input name="general.responsibleCpf" value={formData?.general?.responsibleCpf || ''} onChange={handleChange} /></div></>)}<div><Label>Nome do Titular</Label><Input name="general.holderName" value={formData?.general?.holderName || ''} onChange={handleChange} error={errors?.holderName} /></div><div><Label>CPF do Titular</Label><Input name="general.holderCpf" value={formData?.general?.holderCpf || ''} onChange={handleChange} error={errors?.holderCpf} /></div><div><Label>E-mail do Cliente</Label><Input type="email" name="general.email" value={formData?.general?.email || ''} onChange={handleChange} error={errors?.email} /></div><div><Label>Celular / Telefone (Cliente)</Label><Input type="tel" name="general.phone" value={formData?.general?.phone || ''} onChange={handleChange} /></div><div><Label>Nome do Contato (recados)</Label><Input name="general.contactName" value={formData?.general?.contactName || ''} onChange={handleChange} /></div><div><Label>Celular / Telefone (Contato)</Label><Input type="tel" name="general.contactPhone" value={formData?.general?.contactPhone || ''} onChange={handleChange} /></div><div><Label>Data de Nasc. (Titular)</Label><DateField name="general.dob" value={formData?.general?.dob || ''} onChange={handleChange} /></div><div><Label>Peso (kg)</Label><Input type="number" name="general.weight" value={formData?.general?.weight || ''} onChange={(e) => { const {name, value} = e.target; handleChange({target: {name, value: value.replace(/[^0-9]/g, '')}})}} placeholder="Ex: 70" /></div><div><Label>Altura (cm)</Label><Input type="number" name="general.height" value={formData?.general?.height || ''} onChange={(e) => { const {name, value} = e.target; handleChange({target: {name, value: value.replace(/[^0-9]/g, '')}})}} placeholder="Ex: 175 (em cm)" /></div></FormSection>);
+const GeneralInfoForm = ({ formData, handleChange, errors }) => (
+    <FormSection title="Visão Geral" cols={3}>
+        {/* --- LINHA 1 (ORDEM AJUSTADA) --- */}
+        <div>
+            <Label>Nome da Empresa</Label>
+            <Input name="general.companyName" value={formData?.general?.companyName || ''} onChange={handleChange} />
+        </div>
+        <div>
+            <Label>Tipo de Contrato</Label>
+            <Select name="general.clientType" value={formData?.general?.clientType || ''} onChange={handleChange}>
+                <option>PME</option><option>Pessoa Física</option><option>Adesão</option>
+            </Select>
+        </div>
+        <div>
+            <Label>Status</Label>
+            <Select name="general.status" value={formData?.general?.status || ''} onChange={handleChange}>
+                <option>Ativo</option><option>Inativo</option><option>Prospect</option><option>Pendente</option>
+            </Select>
+        </div>
+
+        {/* --- LINHA 2 --- */}
+        <div>
+            <Label>CNPJ</Label>
+            <Input name="general.cnpj" value={formData?.general?.cnpj || ''} onChange={handleChange} />
+        </div>
+        <div>
+            <Label>Nome do Responsável</Label>
+            <Input name="general.responsibleName" value={formData?.general?.responsibleName || ''} onChange={handleChange} />
+        </div>
+        <div>
+            <Label>CPF do Responsável</Label>
+            <Input name="general.responsibleCpf" value={formData?.general?.responsibleCpf || ''} onChange={handleChange} />
+        </div>
+
+        {/* --- LINHA 3 (COM A NOVA LÓGICA) --- */}
+        <div>
+            <Label>Responsável</Label>
+            <Select name="general.responsibleStatus" value={formData?.general?.responsibleStatus || 'É beneficiário'} onChange={handleChange}>
+                <option>É beneficiário</option>
+                <option>Não é beneficiário</option>
+            </Select>
+        </div>
+        <div>
+            <Label>Email Responsável</Label>
+            <Input type="email" name="general.email" value={formData?.general?.email || ''} onChange={handleChange} error={errors?.email} />
+        </div>
+        <div>
+            <Label>Telefone Responsável</Label>
+            <Input type="tel" name="general.holderCpf" value={formData?.general?.holderCpf || ''} onChange={handleChange} />
+        </div>
+
+        {/* --- LINHA 4 --- */}
+        <div>
+            <Label>Nome do Contato</Label>
+            <Input name="general.phone" value={formData?.general?.phone || ''} onChange={handleChange} />
+        </div>
+        <div>
+            <Label>Cargo do Contato</Label>
+            <Input name="general.contactRole" value={formData?.general?.contactRole || ''} onChange={handleChange} />
+        </div>
+        <div>
+            <Label>Telefone do Contato</Label>
+            <Input type="tel" name="general.contactPhone" value={formData?.general?.contactPhone || ''} onChange={handleChange} />
+        </div>
+    </FormSection>
+);
 const InternalDataForm = ({ formData, handleChange }) => { const { users } = useData(); return (<FormSection title="Dados Internos e Gestão" cols={2}><div><Label>Corretor Responsável</Label><Select name="internal.brokerId" value={formData?.internal?.brokerId || ''} onChange={handleChange}><option value="">Selecione...</option>{users.filter(u => u.permissionLevel === 'Corretor').map(u => <option key={u.id} value={u.id}>{u?.name}</option>)}</Select></div><div><Label>Supervisor</Label><Select name="internal.supervisorId" value={formData?.internal?.supervisorId || ''} onChange={handleChange}><option value="">Selecione...</option>{users.filter(u => u.permissionLevel === 'Supervisor').map(u => <option key={u.id} value={u.id}>{u?.name}</option>)}</Select></div></FormSection>); };
 
 const BeneficiaryModal = ({ isOpen, onClose, onSave, beneficiary }) => {
-    const getInitialFormState = () => ({ id: null, name: '', dob: '', kinship: 'Titular', weight: '', height: '', idCardNumber: '', credentials: { appLogin: '', appPassword: '' } });
+    const getInitialFormState = () => ({ id: null, name: '', cpf: '', dob: '', kinship: 'Titular', weight: '', height: '', idCardNumber: '', credentials: { appLogin: '', appPassword: '' } });
     const [formState, setFormState] = useState(getInitialFormState());
     const [age, setAge] = useState(null);
     const [imc, setImc] = useState({ value: null, classification: '' });
     const kinshipOptions = ["Titular", "Pai", "Mãe", "Tia", "Tio", "Avô", "Avó", "Filho(a)", "Esposa", "Marido", "Sobrinho(a)", "Neto(a)", "Outro"];
-    
+
     useEffect(() => {
         if (isOpen) {
-            setFormState(beneficiary ? { ...getInitialFormState(), ...beneficiary, id: beneficiary.id || `ben_${Date.now()}` } : getInitialFormState());
+            setFormState(beneficiary ? { ...getInitialFormState(), ...beneficiary } : getInitialFormState());
         } else {
             setAge(null);
             setImc({ value: null, classification: '' });
@@ -228,50 +354,46 @@ const BeneficiaryModal = ({ isOpen, onClose, onSave, beneficiary }) => {
             if (name === 'height' || name === 'weight') {
                 cleanValue = value.replace(/[^0-9]/g, '');
             }
-            setFormState({ ...formState, [name]: cleanValue });
+            setFormState(p => ({ ...p, [name]: cleanValue }));
         }
     };
-    
+
     const handleSubmit = (e) => {
         e.preventDefault();
         onSave(formState);
     };
-    
+
     return (
         <Modal isOpen={isOpen} onClose={onClose} title={beneficiary ? "Editar Beneficiário" : "Adicionar Beneficiário"}>
             <form onSubmit={handleSubmit} className="space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div><Label>Nome Completo</Label><Input name="name" value={formState.name} onChange={handleChange} required /></div>
-                    <div><Label>Parentesco</Label><Select name="kinship" value={formState.kinship} onChange={handleChange} required>{kinshipOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}</Select></div>
+                    <div><Label>CPF</Label><Input name="cpf" value={formState.cpf} onChange={handleChange} /></div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                        <Label>Data de Nascimento</Label>
-                        <DateField name="dob" value={formState.dob} onChange={handleChange} required />
-                    </div>
+                    <div><Label>Data de Nascimento</Label><DateField name="dob" value={formState.dob} onChange={handleChange} required /></div>
                     {age !== null && <div className="mt-2"><Label>Idade</Label><p className="h-10 flex items-center px-3 text-gray-700 dark:text-gray-300">{age} anos</p></div>}
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div><Label>Peso (kg)</Label><Input type="number" name="weight" value={formState.weight} onChange={handleChange} placeholder="Ex: 70"/></div>
                     <div><Label>Altura (cm)</Label><Input type="number" name="height" value={formState.height} onChange={handleChange} placeholder="Ex: 175 (em cm)"/></div>
                 </div>
-                {imc.value && (
-                    <div className="p-3 bg-gray-100 dark:bg-black/20 rounded-lg">
-                        <p className="text-sm font-semibold text-gray-800 dark:text-white">IMC: {imc.value} - <span className="font-normal">{imc.classification}</span></p>
-                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Este cálculo é uma estimativa e não substitui uma avaliação profissional.</p>
-                    </div>
-                )}
+                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div><Label>IMC</Label><p className="h-10 flex items-center px-3 text-gray-700 dark:text-gray-300">{imc.value ? `${imc.value} - ${imc.classification}` : 'N/D'}</p></div>
+                    <div><Label>Parentesco</Label><Select name="kinship" value={formState.kinship} onChange={handleChange} required>{kinshipOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}</Select></div>
+                </div>
+
                 <div><Label>Número da Carteirinha</Label><Input name="idCardNumber" value={formState.idCardNumber} onChange={handleChange} /></div>
-                
+
                 <h4 className="text-md font-semibold text-cyan-600 dark:text-cyan-400/80 border-t pt-4 mt-4">Credenciais do Beneficiário</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div><Label>Login do App</Label><Input name="credentials.appLogin" value={formState.credentials?.appLogin || ''} onChange={handleChange} /></div>
                     <div><Label>Senha do App</Label><Input type="password" name="credentials.appPassword" value={formState.credentials?.appPassword || ''} onChange={handleChange} /></div>
                 </div>
-                
+
                 <div className="flex justify-end gap-4 pt-4">
                     <Button type="button" variant="outline" onClick={onClose}>Cancelar</Button>
-                    <Button type="submit">Salvar</Button>
+                    <Button type="button" onClick={handleSubmit}>Salvar</Button>
                 </div>
             </form>
         </Modal>
@@ -344,77 +466,112 @@ const HistoryForm = ({ observations, setObservations }) => { const { user } = us
 const DetailItem = memo(( { label, value, isPassword = false, isLink = false, children, isCurrency = false } ) => { const { toast } = useToast(); const [showPassword, setShowPassword] = useState(false); const handleCopy = () => { try { const tempInput = document.createElement('textarea'); tempInput.value = value; document.body.appendChild(tempInput); tempInput.select(); document.execCommand('copy'); document.body.removeChild(tempInput); toast({ title: 'Copiado!', description: `${label} copiado.` }); } catch (err) { toast({ title: 'Erro', description: `Não foi possível copiar.`, variant: 'destructive' }); } }; const displayValue = value || 'N/A'; return (<div className="py-3"><Label>{label}</Label><div className="flex items-center justify-between mt-1 group"><div className="text-md text-gray-800 dark:text-gray-100 break-words">{children ? children : (isLink && value ? <a href={value} target="_blank" rel="noopener noreferrer" className="text-cyan-600 dark:text-cyan-400 hover:underline">{displayValue}</a> : (isPassword && !showPassword ? '••••••••' : (isCurrency ? formatCurrency(value) : displayValue)))}</div><div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">{isPassword && value && (<Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setShowPassword(!showPassword)}>{showPassword ? <EyeOffIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}</Button>)}{value && (<Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleCopy}><CopyIcon className="h-4 w-4" /></Button>)}</div></div></div>); });
 const InternalTab = ({ client }) => { const { users } = useData(); const broker = users.find(u => u.id === client?.internal?.brokerId); const supervisor = users.find(u => u.id === client?.internal?.supervisorId); return (<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-1"><DetailItem label="Corretor" value={broker?.name} /><DetailItem label="Supervisor" value={supervisor?.name} /></div>); };
 
-const BeneficiariesTab = ({ client }) => (
-    <div>
-        {(client?.beneficiaries || []).length > 0 ? (
-            <div className="space-y-4">
-                {(client?.beneficiaries || []).map(ben => (
-                    <GlassPanel key={ben?.id} className="p-4 bg-gray-100 dark:bg-black/20">
-                        <h4 className="font-semibold text-lg text-gray-900 dark:text-white mb-2">
-                            {ben?.name} <span className="text-sm font-normal text-gray-600 dark:text-gray-400">- {ben?.kinship}</span>
-                        </h4>
-                        <div className="mt-2 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 text-sm">
-                            <p><span className="font-bold text-gray-500 dark:text-gray-400">Nascimento:</span> {formatDate(ben?.dob) || 'N/A'}</p>
-                            <p><span className="font-bold text-gray-500 dark:text-gray-400">Idade:</span> {calculateAge(ben?.dob) !== null ? `${calculateAge(ben.dob)} anos` : 'N/A'}</p>
-                            <p><span className="font-bold text-gray-500 dark:text-gray-400">Peso:</span> {ben?.weight ? `${ben.weight} kg` : 'N/A'}</p>
-                            <p><span className="font-bold text-gray-500 dark:text-gray-400">Altura:</span> {ben?.height ? `${ben.height} cm` : 'N/A'}</p>
-                            <p><span className="font-bold text-gray-500 dark:text-gray-400">Carteirinha:</span> {ben?.idCardNumber || 'N/A'}</p>
-                        </div>
-                        {ben.credentials && (ben.credentials.appLogin || ben.credentials.appPassword) && (
-                            <div className="mt-4 pt-3 border-t border-gray-200/50 dark:border-white/10">
-                                <h5 className="text-sm font-bold text-gray-600 dark:text-gray-300 mb-2">Credenciais do Beneficiário</h5>
-                                <DetailItem label="Login do App" value={ben.credentials.appLogin} />
-                                <DetailItem label="Senha do App" value={ben.credentials.appPassword} isPassword />
+const BeneficiariesTab = ({ client }) => {
+    // Função para calcular o IMC e a classificação para exibição
+    const getImcDisplay = (weightStr, heightStr) => {
+        const weight = parseFloat(weightStr);
+        const height = parseFloat(heightStr);
+        if (weight > 0 && height > 0) {
+            const heightInMeters = height / 100;
+            const imcValue = weight / (heightInMeters * heightInMeters);
+            let classification = '';
+            if (imcValue < 18.5) classification = 'Abaixo do peso';
+            else if (imcValue >= 18.5 && imcValue <= 24.9) classification = 'Normal';
+            else if (imcValue >= 25 && imcValue <= 29.9) classification = 'Sobrepeso';
+            else if (imcValue >= 30) classification = 'Obesidade';
+            return `${imcValue.toFixed(2)} - ${classification}`;
+        }
+        return 'N/A';
+    };
+
+    return (
+        <div>
+            {(client?.beneficiaries || []).length > 0 ? (
+                <div className="space-y-4">
+                    {(client?.beneficiaries || []).map(ben => (
+                        <GlassPanel key={ben?.id} className="p-4 bg-gray-100 dark:bg-black/20">
+                            <h4 className="font-semibold text-lg text-gray-900 dark:text-white mb-2">
+                                {ben?.name} <span className="text-sm font-normal text-gray-600 dark:text-gray-400">- {ben?.kinship}</span>
+                            </h4>
+                            <div className="mt-2 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                                <p><span className="font-bold text-gray-500 dark:text-gray-400">CPF:</span> {ben?.cpf || 'N/A'}</p>
+                                <p><span className="font-bold text-gray-500 dark:text-gray-400">Nascimento:</span> {formatDate(ben?.dob) || 'N/A'}</p>
+                                <p><span className="font-bold text-gray-500 dark:text-gray-400">Idade:</span> {calculateAge(ben?.dob) !== null ? `${calculateAge(ben.dob)} anos` : 'N/A'}</p>
+                                <p><span className="font-bold text-gray-500 dark:text-gray-400">Peso:</span> {ben?.weight ? `${ben.weight} kg` : 'N/A'}</p>
+                                <p><span className="font-bold text-gray-500 dark:text-gray-400">Altura:</span> {ben?.height ? `${ben.height} cm` : 'N/A'}</p>
+                                <p><span className="font-bold text-gray-500 dark:text-gray-400">IMC:</span> {getImcDisplay(ben?.weight, ben?.height)}</p>
+                                <p className="col-span-2"><span className="font-bold text-gray-500 dark:text-gray-400">Carteirinha:</span> {ben?.idCardNumber || 'N/A'}</p>
                             </div>
-                        )}
-                    </GlassPanel>
-                ))}
-            </div>
-        ) : (
-            <p className="text-gray-500">Nenhum beneficiário cadastrado.</p>
-        )}
-    </div>
-);
+                            {ben.credentials && (ben.credentials.appLogin || ben.credentials.appPassword) && (
+                                <div className="mt-4 pt-3 border-t border-gray-200/50 dark:border-white/10">
+                                    <h5 className="text-sm font-bold text-gray-600 dark:text-gray-300 mb-2">Credenciais do Beneficiário</h5>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1">
+                                        <DetailItem label="Login do App" value={ben.credentials.appLogin} />
+                                        <DetailItem label="Senha do App" value={ben.credentials.appPassword} isPassword />
+                                    </div>
+                                </div>
+                            )}
+                        </GlassPanel>
+                    ))}
+                </div>
+            ) : (
+                <p className="text-gray-500">Nenhum beneficiário cadastrado.</p>
+            )}
+        </div>
+    );
+}
 
 const HistoryTab = ({ client }) => (<div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">{(client?.observations || []).length === 0 ? (<p className="text-gray-500 text-center py-8">Nenhum histórico de observações para este cliente.</p>) : ((client?.observations || []).map((obs, index) => (<div key={index} className="bg-gray-100 dark:bg-black/20 p-4 rounded-lg relative pl-8"><HistoryIcon className="h-5 w-5 text-cyan-500 dark:text-cyan-400 absolute top-4 left-2"/><p className="text-gray-800 dark:text-gray-200 whitespace-pre-wrap">{obs.text}</p><p className="text-xs text-gray-500 mt-2 text-right">{obs.authorName} em {formatDateTime(obs.timestamp)}</p></div>)))}</div>);
 const CortexTab = ({ client }) => { const [summary, setSummary] = useState(''); const [isLoading, setIsLoading] = useState(false); const { toast } = useToast(); const handleSummarize = async () => { setIsLoading(true); setSummary(''); const result = await Cortex.summarizeHistory(client); if (result.startsWith('Erro:')) { toast({ title: 'Erro do Córtex', description: result, variant: 'destructive' }); } else { setSummary(result); } setIsLoading(false); }; return (<div><div className="flex items-center gap-4"><Button variant="violet" onClick={handleSummarize} disabled={isLoading}><SparklesIcon className="h-4 w-4 mr-2" />{isLoading ? 'Analisando Histórico...' : 'Sumarizar Histórico com IA'}</Button></div>{isLoading && <p className="mt-4 text-cyan-500 dark:text-cyan-400">O Córtex Gemini está processando as informações...</p>}{summary && (<GlassPanel className="mt-6 p-6 bg-gray-100 dark:bg-black/20"><h4 className="font-semibold text-lg text-violet-600 dark:text-violet-300 mb-3">Resumo da IA</h4><div className="text-gray-700 dark:text-gray-300 whitespace-pre-wrap prose dark:prose-invert prose-p:my-1 prose-ul:my-2 prose-li:my-1">{summary}</div></GlassPanel>)}</div>); };
 const CommissionForm = ({ formData, handleChange }) => { const commissionData = formData?.commission || {}; return ( <FormSection title="Dados de Comissionamento" cols={2}> <div><Label>Valor do Contrato (Base para Comissão)</Label><Input type="number" step="0.01" name="commission.contractValue" value={commissionData.contractValue || ''} onChange={handleChange} placeholder="Ex: 7000.00" /></div> <div><Label>Taxa de Comissão (Ex: 1.0 para 100%)</Label><Input type="number" step="0.1" name="commission.commissionRate" value={commissionData.commissionRate || ''} onChange={handleChange} placeholder="Ex: 3.0" /></div> <div><Label>Estrutura de Pagamento</Label><Select name="commission.paymentStructure" value={commissionData.paymentStructure || ''} onChange={handleChange}><option value="">Selecione...</option><option value="à vista">À Vista</option><option value="parcelado">Parcelado</option><option value="antecipado">Antecipado</option><option value="por boleto">Por Boleto</option></Select></div> {commissionData.paymentStructure === 'parcelado' && (<div><Label>Número de Parcelas</Label><Input type="number" name="commission.parcelCount" value={commissionData.parcelCount || ''} onChange={handleChange} /></div>)} <div><Label>Parcelas Já Recebidas</Label><Input type="number" name="commission.receivedInstallments" value={commissionData.receivedInstallments || 0} onChange={handleChange} /></div> <div><Label>Data de Início do Pagamento da Comissão</Label><DateField name="commission.paymentStartDate" value={commissionData.paymentStartDate || ''} onChange={handleChange} /></div> <div className="md:col-span-2"><Label>Status do Pagamento da Comissão</Label><Select name="commission.status" value={commissionData.status || ''} onChange={handleChange}><option value="">Selecione...</option><option value="Pendente">Pendente</option><option value="Pagamento Parcial">Pagamento Parcial</option><option value="Pago">Pago</option><option value="Cancelado">Cancelado</option></Select></div> </FormSection> ); };
 const CommissionDetailsTab = ({ client }) => { const commission = client?.commission; if (!commission) return <p className="text-gray-500">Nenhuma informação de comissão cadastrada.</p>; const totalCommission = (commission.contractValue || 0) * (commission.commissionRate || 0); const installmentValue = commission.paymentStructure === 'parcelado' && commission.parcelCount > 0 ? totalCommission / commission.parcelCount : totalCommission; const statusVariant = { 'Pago': 'success', 'Pagamento Parcial': 'warning', 'Pendente': 'secondary', 'Cancelado': 'danger' }[commission.status] || 'default'; return ( <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-1"> <DetailItem label="Status da Comissão"><Badge variant={statusVariant}>{commission.status || 'N/A'}</Badge></DetailItem> <DetailItem label="Valor Base do Contrato" value={commission.contractValue} isCurrency /> <DetailItem label="Taxa de Comissão" value={`${(commission.commissionRate || 0) * 100}%`} /> <DetailItem label="Comissão Total Estimada" value={totalCommission} isCurrency /> <DetailItem label="Estrutura de Pagamento" value={commission.paymentStructure} /> {commission.paymentStructure === 'parcelado' && ( <> <DetailItem label="Número de Parcelas" value={commission.parcelCount} /> <DetailItem label="Valor por Parcela" value={installmentValue} isCurrency /> <DetailItem label="Parcelas Recebidas" value={commission.receivedInstallments} /> </> )} <DetailItem label="Data de Início dos Pagamentos" value={formatDate(commission.paymentStartDate)} /> </div> ); };
-const ContractDetails = ({ contract }) => {
+const ContractDetails = ({ contract, clientType }) => {
     const { users } = useData();
     const boletoOwner = users.find(u => u.id === contract.boletoResponsibleId);
 
     return (
         <>
+            {/* DADOS DO CONTRATO */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-1">
+                <DetailItem label="Plano Fechado (Operadora)" value={contract?.planOperator} />
                 <DetailItem label="Nº da Proposta" value={contract?.proposalNumber} />
                 <DetailItem label="Nº da Apólice/Contrato" value={contract?.policyNumber} />
-                <DetailItem label="Operadora" value={contract?.planOperator} />
-                <DetailItem label="Plano Anterior" value={contract?.previousPlan} />
-                <DetailItem label="Tipo de Plano" value={contract?.planTypes?.join(', ')} />
                 <DetailItem label="Categoria" value={contract?.planCategory} />
                 <DetailItem label="Acomodação" value={contract?.accommodation} />
+                <DetailItem label="Tipo de Plano" value={contract?.planTypes?.join(', ')} />
+                <DetailItem label="Tipo de Contrato" value={clientType} />
                 <DetailItem label="Valor do Contrato" value={contract?.contractValue} isCurrency />
                 <DetailItem label="Valor da Taxa" value={contract?.feeValue} isCurrency />
                 <DetailItem label="Forma de Pagamento" value={contract?.paymentMethod} />
                 <DetailItem label="Data da Vigência" value={formatDate(contract?.effectiveDate)} />
-                <DetailItem label="Data Fim do Contrato" value={formatDate(contract?.dataFimContrato)} />
                 <DetailItem label="Vencimento Mensal" value={contract?.monthlyDueDate ? `Dia ${contract.monthlyDueDate}`: 'N/A'} />
                 <DetailItem label="Data Envio do Boleto" value={formatDate(contract?.boletoSentDate)} />
                 <DetailItem label="Responsável pelo Boleto" value={boletoOwner?.name} />
+                <DetailItem label="Renovação de Contrato" value={formatDate(contract?.renewalDate)} />
+                <DetailItem label="Status" value={contract?.status} />
+                <DetailItem label="Plano Anterior" value={contract?.previousPlan} />
             </div>
-            
-            {contract.credentials && (
-                <div className="mt-4 pt-4 border-t border-gray-200/50 dark:border-white/10">
-                    <h5 className="text-md font-bold text-gray-700 dark:text-gray-200 mb-2">Credenciais do Titular (Contrato)</h5>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-1">
-                        <DetailItem label="E-mail Criado" value={contract.credentials.createdEmail} />
-                        <DetailItem label="Senha do E-mail" value={contract.credentials.createdEmailPassword} isPassword />
-                        <DetailItem label="Site do Portal" value={contract.credentials.portalSite} isLink />
-                        <DetailItem label="Login do Portal" value={contract.credentials.portalLogin} />
-                        <DetailItem label="Senha do Portal" value={contract.credentials.portalPassword} isPassword />
-                        <DetailItem label="Login do App" value={contract.credentials.appLogin} />
-                        <DetailItem label="Senha do App" value={contract.credentials.appPassword} isPassword />
+
+            {/* CREDENCIAIS EM LISTA */}
+            {(contract.credentialsList || []).length > 0 && (
+                <div className="mt-6 pt-4 border-t border-gray-200/50 dark:border-white/10">
+                    <h5 className="text-md font-bold text-gray-700 dark:text-gray-200 mb-2">Credenciais</h5>
+                    <div className="space-y-4">
+                        {(contract.credentialsList).map(cred => (
+                            <GlassPanel key={cred.id} className="p-4 bg-gray-100 dark:bg-black/20">
+                                 <h4 className="font-semibold text-lg text-gray-900 dark:text-white mb-2">{cred.title}</h4>
+                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-1">
+                                    <DetailItem label="Email Criado" value={cred.createdEmail} />
+                                    <DetailItem label="Senha do Email" value={cred.createdEmailPassword} isPassword />
+                                    <DetailItem label="Site do Portal" value={cred.portalSite} isLink />
+                                    <DetailItem label="Senha do Portal" value={cred.portalPassword} isPassword />
+                                    <DetailItem label="Login do Portal" value={cred.portalLogin} />
+                                    <DetailItem label="Usuário do Portal" value={cred.portalUser} />
+                                    <DetailItem label="Login do App" value={cred.appLogin} />
+                                    <DetailItem label="Senha do App" value={cred.appPassword} isPassword />
+                                 </div>
+                            </GlassPanel>
+                        ))}
                     </div>
                 </div>
             )}
@@ -424,12 +581,114 @@ const ContractDetails = ({ contract }) => {
 const ContractManager = ({ client, onBack, onEdit }) => { const activeContract = (client.contracts || []).find(c => c.status === 'ativo'); const inactiveContracts = (client.contracts || []).filter(c => c.status !== 'ativo'); return (<div className="space-y-6"> {activeContract ? ( <GlassPanel className="p-6 border-l-4 border-green-500"> <div className="flex justify-between items-center mb-4"> <h3 className="text-xl font-semibold text-gray-900 dark:text-white">Contrato Ativo</h3> <Badge variant="success">ATIVO</Badge> </div> <ContractDetails contract={activeContract} /> </GlassPanel> ) : ( <EmptyState title="Nenhum Contrato Ativo" message="Não há um contrato marcado como ativo para este cliente." /> )} {inactiveContracts.length > 0 && ( <GlassPanel className="p-6"> <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">Histórico de Contratos</h3> <div className="space-y-4"> {inactiveContracts.map(contract => ( <div key={contract.id} className="p-4 bg-gray-100 dark:bg-black/20 rounded-lg"> <div className="flex justify-between items-center mb-2"> <h4 className="font-semibold text-gray-900 dark:text-white">{contract.planOperator} - {formatDate(contract.effectiveDate)}</h4> <Badge variant="secondary">ARQUIVADO</Badge> </div> <ContractDetails contract={contract} /> </div> ))} </div> </GlassPanel> )} <div className="flex justify-end gap-4"> <Button variant="outline" onClick={onBack}><ChevronLeftIcon className="h-4 w-4 mr-1" /> Voltar para Cliente</Button> <Button onClick={() => onEdit(client, { initialTab: 'contracts' })}><PlusCircleIcon className="h-4 w-4 mr-2" /> Gerenciar Contratos</Button> </div></div>);};
 
 // --- MODAIS ---
+const ColumnModal = ({ isOpen, onClose, onSave }) => {
+    const [title, setTitle] = useState('');
+    const [color, setColor] = useState('#3B82F6');
+    const colorOptions = ['#3B82F6', '#0EA5E9', '#F59E0B', '#10B981', '#EF4444', '#8B5CF6', '#D946EF'];
+
+    const handleSave = () => {
+        if (title.trim()) {
+            onSave({ title: title.trim(), color });
+            setTitle('');
+            setColor('#3B82F6');
+        }
+    };
+
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title="Adicionar Nova Coluna">
+            <div className="space-y-4">
+                <div>
+                    <Label>Nome da Coluna</Label>
+                    <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ex: Em Negociação" />
+                </div>
+                <div>
+                    <Label>Cor da Coluna</Label>
+                    <div className="flex gap-3 mt-2">
+                        {colorOptions.map(c => (
+                            <button key={c} type="button" onClick={() => setColor(c)} style={{ backgroundColor: c }} className={cn("w-8 h-8 rounded-full transition-all", color === c ? 'ring-2 ring-offset-2 ring-cyan-500 dark:ring-offset-gray-800' : 'hover:scale-110')} />
+                        ))}
+                    </div>
+                </div>
+            </div>
+            <div className="flex justify-end gap-4 pt-6 mt-4 border-t border-gray-200 dark:border-white/10">
+                <Button variant="outline" onClick={onClose}>Cancelar</Button>
+                <Button onClick={handleSave}>Salvar Coluna</Button>
+            </div>
+        </Modal>
+    );
+};
 const LeadModal = ({ isOpen, onClose, onSave, lead }) => { const { user } = useAuth(); const [formState, setFormState] = useState({}); useEffect(() => { if (lead) { setFormState(lead); } else { setFormState({ name: '', company: '', email: '', phone: '', notes: '', status: 'Novo', ownerId: user?.uid, responseDeadlineDays: 3 }); } }, [lead, isOpen, user]); const handleChange = (e) => setFormState(p => ({...p, [e.target.name]: e.target.value})); const handleSubmit = (e) => { e.preventDefault(); onSave(formState); onClose(); }; return (<Modal isOpen={isOpen} onClose={onClose} title={lead ? "Editar Lead" : "Adicionar Novo Lead"}><form onSubmit={handleSubmit} className="space-y-4"><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div><Label>Nome do Lead</Label><Input name="name" value={formState.name || ''} onChange={handleChange} required /></div><div><Label>Empresa</Label><Input name="company" value={formState.company || ''} onChange={handleChange} /></div><div><Label>Email</Label><Input type="email" name="email" value={formState.email || ''} onChange={handleChange} /></div><div><Label>Telefone</Label><Input type="tel" name="phone" value={formState.phone || ''} onChange={handleChange} /></div></div><div><Label>Observações (Córtex AI irá analisar)</Label><Textarea name="notes" value={formState.notes || ''} onChange={handleChange} rows={4} placeholder="Ex: Indicado por cliente X, precisa fechar com urgência..."/></div><div><Label>Prazo de Resposta (dias)</Label><Input type="number" name="responseDeadlineDays" value={formState.responseDeadlineDays || 3} onChange={handleChange} /></div><div className="flex justify-end gap-4 pt-4"><Button type="button" variant="outline" onClick={onClose}>Cancelar</Button><Button type="submit">Salvar Lead</Button></div></form></Modal>); };
+const CredentialModal = ({ isOpen, onClose, onSave, credential }) => {
+    const getInitialState = () => ({
+        id: `local_${Date.now()}`,
+        title: '',
+        createdEmail: '',
+        createdEmailPassword: '',
+        portalSite: '',
+        portalPassword: '',
+        portalLogin: '',
+        portalUser: '',
+        appLogin: '',
+        appPassword: ''
+    });
+    const [formState, setFormState] = useState(getInitialState());
+
+    useEffect(() => {
+        if (isOpen) {
+            setFormState(credential ? { ...getInitialState(), ...credential } : getInitialState());
+        }
+    }, [credential, isOpen]);
+
+    const handleChange = (e) => {
+        const { name, value } = e.target;
+        setFormState(p => ({ ...p, [name]: value }));
+    };
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        if (formState.title.trim()) {
+            onSave(formState);
+        }
+    };
+
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title={credential ? "Editar Credencial" : "Adicionar Nova Credencial"}>
+            <form onSubmit={handleSubmit} className="space-y-6">
+                <div>
+                    <Label>Título (Ex: Portal Amil Saúde, Acesso Dental Uni)</Label>
+                    <Input name="title" value={formState.title} onChange={handleChange} required placeholder="Identificação da credencial" />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t pt-4">
+                    <div><Label>Email Criado</Label><Input name="createdEmail" value={formState.createdEmail} onChange={handleChange} /></div>
+                    <div><Label>Senha do Email Criado</Label><Input type="password" name="createdEmailPassword" value={formState.createdEmailPassword} onChange={handleChange} /></div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t pt-4">
+                    <div><Label>Site do Portal</Label><Input name="portalSite" value={formState.portalSite} onChange={handleChange} placeholder="https://exemplo.com" /></div>
+                    <div><Label>Senha do Portal</Label><Input type="password" name="portalPassword" value={formState.portalPassword} onChange={handleChange} /></div>
+                    <div><Label>Login do Portal</Label><Input name="portalLogin" value={formState.portalLogin} onChange={handleChange} /></div>
+                    <div><Label>Usuário do Portal</Label><Input name="portalUser" value={formState.portalUser} onChange={handleChange} /></div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t pt-4">
+                    <div><Label>Login do App</Label><Input name="appLogin" value={formState.appLogin} onChange={handleChange} /></div>
+                    <div><Label>Senha do App</Label><Input type="password" name="appPassword" value={formState.appPassword} onChange={handleChange} /></div>
+                </div>
+
+                <div className="flex justify-end gap-4 pt-6">
+                    <Button type="button" variant="outline" onClick={onClose}>Cancelar</Button>
+                    <Button type="button" onClick={handleSubmit}>Salvar Credencial</Button>
+                </div>
+            </form>
+        </Modal>
+    );
+};
 const AddCollaboratorModal = ({ isOpen, onClose, onSave }) => { const [formData, setFormData] = useState({ name: '', email: '', password: '', permissionLevel: 'Corretor', supervisorId: '' }); const { users } = useData(); const handleChange = (e) => setFormData(prev => ({...prev, [e.target.name]: e.target.value })); const handleSubmit = (e) => { e.preventDefault(); onSave(formData); setFormData({ name: '', email: '', password: '', permissionLevel: 'Corretor', supervisorId: '' }); }; return (<Modal isOpen={isOpen} onClose={onClose} title="Adicionar Novo Colaborador"><form onSubmit={handleSubmit} className="space-y-4"><div><Label>Nome Completo</Label><Input name="name" onChange={handleChange} required /></div><div><Label>Email</Label><Input type="email" name="email" onChange={handleChange} required /></div><div><Label>Senha</Label><Input type="password" name="password" onChange={handleChange} required /></div><div><Label>Nível de Permissão</Label><Select name="permissionLevel" value={formData.permissionLevel} onChange={handleChange}><option>Corretor</option><option>Supervisor</option><option>Admin</option></Select></div>{formData.permissionLevel === 'Corretor' && (<div><Label>Vincular ao Supervisor</Label><Select name="supervisorId" value={formData.supervisorId} onChange={handleChange}><option value="">Nenhum</option>{users.filter(u => u.permissionLevel === 'Supervisor').map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></div>)}<div className="flex justify-end gap-4 pt-4"><Button type="button" variant="outline" onClick={onClose}>Cancelar</Button><Button type="submit">Adicionar</Button></div></form></Modal>); };
 const AddOperatorModal = ({ isOpen, onClose, onSave }) => { const [name, setName] = useState(''); const handleSubmit = (e) => { e.preventDefault(); onSave({ name }); setName(''); }; return (<Modal isOpen={isOpen} onClose={onClose} title="Adicionar Nova Operadora"><form onSubmit={handleSubmit} className="space-y-4"><div><Label>Nome da Operadora</Label><Input value={name} onChange={(e) => setName(e.target.value)} required /></div><div className="flex justify-end gap-4 pt-4"><Button type="button" variant="outline" onClick={onClose}>Cancelar</Button><Button type="submit">Adicionar</Button></div></form></Modal>); };
 const TaskModal = ({ isOpen, onClose, onSave, task }) => { const { users, clients, leads } = useData(); const [formState, setFormState] = useState({}); useEffect(() => { setFormState(task ? task : { title: '', description: '', assignedTo: '', dueDate: '', priority: 'Média', linkedToId: '', linkedToType: '', status: 'Pendente' }); }, [task, isOpen]); const handleChange = (e) => setFormState(p => ({ ...p, [e.target.name]: e.target.value })); const handleLinkChange = (e) => { const [type, id] = e.target.value.split('-'); setFormState(p => ({ ...p, linkedToType: type, linkedToId: id })); }; const handleSubmit = (e) => { e.preventDefault(); onSave(formState); }; const linkedValue = formState.linkedToType && formState.linkedToId ? `${formState.linkedToType}-${formState.linkedToId}` : ''; return (<Modal isOpen={isOpen} onClose={onClose} title={task ? "Editar Tarefa" : "Adicionar Nova Tarefa"}><form onSubmit={handleSubmit} className="space-y-4"><div><Label>Título</Label><Input name="title" value={formState.title || ''} onChange={handleChange} required /></div><div><Label>Descrição</Label><Textarea name="description" value={formState.description || ''} onChange={handleChange} rows={3} /></div><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div><Label>Responsável</Label><Select name="assignedTo" value={formState.assignedTo || ''} onChange={handleChange}><option value="">Ninguém</option>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></div><div><Label>Data de Vencimento</Label><DateField name="dueDate" value={formState.dueDate || ''} onChange={handleChange} /></div></div><div><Label>Prioridade</Label><Select name="priority" value={formState.priority || 'Média'} onChange={handleChange}><option>Baixa</option><option>Média</option><option>Alta</option></Select></div><div><Label>Vincular a Cliente/Lead</Label><Select value={linkedValue} onChange={handleLinkChange}><option value="">Nenhum</option><optgroup label="Clientes">{clients.map(c => <option key={c.id} value={`client-${c.id}`}>{c.general?.holderName || c.general?.companyName}</option>)}</optgroup><optgroup label="Leads">{leads.map(l => <option key={l.id} value={`lead-${l.id}`}>{l.name}</option>)}</optgroup></Select></div><div className="flex justify-end gap-4 pt-4"><Button type="button" variant="outline" onClick={onClose}>Cancelar</Button><Button type="submit">Salvar Tarefa</Button></div></form></Modal>); };
 const ConfirmModal = ({ isOpen, onClose, onConfirm, title, description }) => { if (!isOpen) return null; return (<Modal isOpen={isOpen} onClose={onClose} title={title || "Confirmar Ação"}><p className="text-gray-700 dark:text-gray-300">{description || "Tem certeza que deseja prosseguir?"}</p><div className="flex justify-end gap-4 mt-6"><Button variant="outline" onClick={onClose}>Cancelar</Button><Button variant="destructive" onClick={onConfirm}>Confirmar</Button></div></Modal>); };
-const ContractModal = ({ isOpen, onClose, onSave, contract }) => {
+const ContractModal = ({ isOpen, onClose, onSave, contract, clientType }) => {
     const { operators, users } = useData();
     const getInitialState = () => ({
         id: `local_${Date.now()}`,
@@ -447,20 +706,14 @@ const ContractModal = ({ isOpen, onClose, onSave, contract }) => {
         monthlyDueDate: '',
         effectiveDate: '',
         boletoSentDate: '',
-        dataFimContrato: '',
+        renewalDate: '',
         boletoResponsibleId: '',
-        credentials: {
-            portalSite: '',
-            portalLogin: '',
-            portalPassword: '',
-            createdEmail: '', 
-            createdEmailPassword: '',
-            appLogin: '',
-            appPassword: ''
-        }
+        credentialsList: [] // Sistema de lista de credenciais
     });
 
     const [formState, setFormState] = useState(getInitialState());
+    const [isCredentialModalOpen, setCredentialModalOpen] = useState(false);
+    const [editingCredential, setEditingCredential] = useState(null);
 
     useEffect(() => {
         if (isOpen) {
@@ -473,12 +726,27 @@ const ContractModal = ({ isOpen, onClose, onSave, contract }) => {
         if (type === 'checkbox') {
             const newTypes = checked ? [...(formState.planTypes || []), value] : (formState.planTypes || []).filter(v => v !== value);
             setFormState(p => ({ ...p, planTypes: newTypes }));
-        } else if (name.includes('.')) {
-            const [parent, child] = name.split('.');
-            setFormState(p => ({ ...p, [parent]: { ...p[parent], [child]: value } }));
         } else {
             setFormState(p => ({ ...p, [name]: value }));
         }
+    };
+
+    const handleSaveCredential = (credentialData) => {
+        const newList = [...(formState.credentialsList || [])];
+        const index = newList.findIndex(c => c.id === credentialData.id);
+        if (index > -1) {
+            newList[index] = credentialData;
+        } else {
+            newList.push(credentialData);
+        }
+        setFormState(p => ({ ...p, credentialsList: newList }));
+        setCredentialModalOpen(false);
+        setEditingCredential(null);
+    };
+
+    const handleDeleteCredential = (credentialId) => {
+        const newList = (formState.credentialsList || []).filter(c => c.id !== credentialId);
+        setFormState(p => ({ ...p, credentialsList: newList }));
     };
 
     const handleSubmit = (e) => {
@@ -489,53 +757,239 @@ const ContractModal = ({ isOpen, onClose, onSave, contract }) => {
     return (
         <Modal isOpen={isOpen} onClose={onClose} title={contract ? "Editar Contrato" : "Adicionar Novo Contrato"} size="6xl">
             <form onSubmit={handleSubmit} className="space-y-6">
+                {/* --- DADOS DO CONTRATO --- */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                    <div><Label>Plano Fechado (Operadora)</Label><Select name="planOperator" value={formState.planOperator || ''} onChange={handleChange}><option value="">Selecione</option>{operators.map(op => <option key={op.id} value={op.name}>{op.name}</option>)}</Select></div>
                     <div><Label>Número da Proposta</Label><Input name="proposalNumber" value={formState.proposalNumber || ''} onChange={handleChange} /></div>
                     <div><Label>Número da Apólice / Contrato</Label><Input name="policyNumber" value={formState.policyNumber || ''} onChange={handleChange} /></div>
-                    <div><Label>Plano Fechado (Operadora)</Label><Select name="planOperator" value={formState.planOperator || ''} onChange={handleChange}><option value="">Selecione</option>{operators.map(op => <option key={op.id} value={op.name}>{op.name}</option>)}</Select></div>
                 </div>
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                    <div><Label>Plano Anterior</Label><Input name="previousPlan" value={formState.previousPlan || ''} onChange={handleChange} /></div>
-                    <div className="lg:col-span-2"><Label>Tipo de Plano</Label><div className="flex gap-6 mt-2 pt-2 text-gray-800 dark:text-gray-300"><label className="font-bold flex items-center gap-2"><Checkbox name="planTypes" value="Saúde" checked={(formState.planTypes || []).includes('Saúde')} onChange={handleChange} /> Saúde</label><label className="font-bold flex items-center gap-2"><Checkbox name="planTypes" value="Dental" checked={(formState.planTypes || []).includes('Dental')} onChange={handleChange} /> Dental</label></div></div>
-                </div>
+                {/* ... (outras linhas do formulário de contrato) ... */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                     <div><Label>Categoria do Plano</Label><Input name="planCategory" value={formState.planCategory || ''} onChange={handleChange} /></div>
                     <div><Label>Acomodação</Label><Select name="accommodation" value={formState.accommodation || ''} onChange={handleChange}><option>Enfermaria</option><option>Apartamento</option></Select></div>
-                    <div><Label>Valor do Contrato</Label><Input type="number" name="contractValue" value={formState.contractValue || ''} onChange={handleChange} /></div>
+                    <div><Label>Tipo de Plano</Label><div className="flex gap-6 mt-2 pt-2 text-gray-800 dark:text-gray-300"><label className="font-bold flex items-center gap-2"><Checkbox name="planTypes" value="Saúde" checked={(formState.planTypes || []).includes('Saúde')} onChange={handleChange} /> Saúde</label><label className="font-bold flex items-center gap-2"><Checkbox name="planTypes" value="Dental" checked={(formState.planTypes || []).includes('Dental')} onChange={handleChange} /> Dental</label></div></div>
                 </div>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                    <div><Label>Tipo de Contrato (da Visão Geral)</Label><p className="h-10 flex items-center px-3 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-black/20 rounded-lg">{clientType || 'N/A'}</p></div>
+                    <div><Label>Valor do Contrato</Label><Input type="number" name="contractValue" value={formState.contractValue || ''} onChange={handleChange} /></div>
                     <div><Label>Valor da Taxa</Label><Input type="number" name="feeValue" value={formState.feeValue || ''} onChange={handleChange} /></div>
+                </div>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                     <div><Label>Forma de Pagamento</Label><Select name="paymentMethod" value={formState.paymentMethod || ''} onChange={handleChange}><option>Boleto</option><option>Cartão de Crédito</option><option>Débito Automático</option><option>Pix</option></Select></div>
+                    <div><Label>Data da Vigência</Label><DateField name="effectiveDate" value={formState.effectiveDate || ''} onChange={handleChange} /></div>
                     <div><Label>Vencimento Mensal (Dia)</Label><Input type="number" name="monthlyDueDate" value={formState.monthlyDueDate || ''} onChange={handleChange} /></div>
                 </div>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                    <div><Label>Data da Vigência</Label><DateField name="effectiveDate" value={formState.effectiveDate || ''} onChange={handleChange} /></div>
                     <div><Label>Data Envio do Boleto</Label><DateField name="boletoSentDate" value={formState.boletoSentDate || ''} onChange={handleChange} /></div>
                     <div><Label>Responsável pelo Boleto</Label><Select name="boletoResponsibleId" value={formState.boletoResponsibleId || ''} onChange={handleChange}><option value="">Selecione...</option>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></div>
                 </div>
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                    <div><Label>Data Fim do Contrato</Label><DateField name="dataFimContrato" value={formState.dataFimContrato || ''} onChange={handleChange} /></div>
+                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                    <div><Label>Renovação de Contrato</Label><DateField name="renewalDate" value={formState.renewalDate || ''} onChange={handleChange} /></div>
                     <div><Label>Status</Label><Select name="status" value={formState.status || 'ativo'} onChange={handleChange}><option value="ativo">Ativo</option><option value="inativo">Inativo (Histórico)</option></Select></div>
+                     <div><Label>Plano Anterior</Label><Input name="previousPlan" value={formState.previousPlan || ''} onChange={handleChange} /></div>
                 </div>
 
-                <h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80 border-t border-gray-200 dark:border-white/10 pt-4 mt-4">Credenciais do Titular (Contrato)</h3>
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    <div><Label>E-mail Criado</Label><Input name="credentials.createdEmail" value={formState.credentials?.createdEmail || ''} onChange={handleChange} /></div>
-                    <div><Label>Senha do E-mail</Label><Input type="password" name="credentials.createdEmailPassword" value={formState.credentials?.createdEmailPassword || ''} onChange={handleChange} /></div>
-                    <div><Label>Site do Portal</Label><Input name="credentials.portalSite" value={formState.credentials?.portalSite || ''} onChange={handleChange} placeholder="https://exemplo.com"/></div>
-                    <div><Label>Login do Portal</Label><Input name="credentials.portalLogin" value={formState.credentials?.portalLogin || ''} onChange={handleChange} /></div>
-                    <div><Label>Senha do Portal</Label><Input type="password" name="credentials.portalPassword" value={formState.credentials?.portalPassword || ''} onChange={handleChange} /></div>
-                    <div><Label>Login do App</Label><Input name="credentials.appLogin" value={formState.credentials?.appLogin || ''} onChange={handleChange} /></div>
-                    <div><Label>Senha do App</Label><Input type="password" name="credentials.appPassword" value={formState.credentials?.appPassword || ''} onChange={handleChange} /></div>
+                {/* --- SISTEMA DE GERENCIAMENTO DE CREDENCIAIS --- */}
+                <div className="border-t border-gray-200 dark:border-white/10 pt-4 mt-4">
+                     <div className="flex justify-between items-center mb-4">
+                        <h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80">Credenciais</h3>
+                        <Button type="button" onClick={() => { setEditingCredential(null); setCredentialModalOpen(true); }}><PlusCircleIcon className="h-4 w-4 mr-2" />Adicionar Credencial</Button>
+                    </div>
+                    <div className="space-y-2">
+                         {(formState.credentialsList || []).length === 0 ? <p className="text-gray-500 text-center py-4">Nenhuma credencial adicionada.</p> : (formState.credentialsList || []).map(cred => (
+                            <div key={cred.id} className="p-3 rounded-lg flex justify-between items-center bg-gray-100 dark:bg-black/20">
+                                <div><p className="font-semibold text-gray-900 dark:text-white">{cred.title}</p><p className="text-sm text-gray-600 dark:text-gray-400">{cred.portalSite || cred.createdEmail}</p></div>
+                                <div className="flex gap-2"><Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditingCredential(cred); setCredentialModalOpen(true); }}><PencilIcon className="h-4 w-4" /></Button><Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500/70" onClick={() => handleDeleteCredential(cred.id)}><Trash2Icon className="h-4 w-4" /></Button></div>
+                            </div>
+                        ))}
+                    </div>
                 </div>
-                
+
                 <div className="flex justify-end gap-4 pt-4"><Button type="button" variant="outline" onClick={onClose}>Cancelar</Button><Button type="submit">Salvar Contrato</Button></div>
             </form>
+            <CredentialModal isOpen={isCredentialModalOpen} onClose={() => setCredentialModalOpen(false)} onSave={handleSaveCredential} credential={editingCredential} />
         </Modal>
     );
 };
 
 // --- PÁGINAS PRINCIPAIS ---
+const CommissionWizardModal = ({ isOpen, onClose, onSave }) => {
+    const { clients, users } = useData();
+    const [step, setStep] = useState(1);
+    const [commission, setCommission] = useState({ clientId: '', contractId: '', supervisorId: '', brokerId: '', contractValue: 0, commissionRate: '', paymentStructure: 'À Vista', installmentsTotal: 1, firstDueDate: '' });
+    const [activeContracts, setActiveContracts] = useState([]);
+
+    const steps = [
+        { id: 1, name: 'Cliente', icon: UsersIcon },
+        { id: 2, name: 'Contrato', icon: FileTextIcon },
+        { id: 3, name: 'Responsáveis', icon: BriefcaseIcon },
+        { id: 4, name: 'Valores', icon: DollarSignIcon }
+    ];
+
+    useEffect(() => {
+        if (commission.clientId) {
+            const client = clients.find(c => c.id === commission.clientId);
+            const contracts = (client?.contracts || []).filter(c => c.status === 'ativo');
+            setActiveContracts(contracts);
+            if (contracts.length === 1) {
+                setCommission(p => ({ ...p, contractId: contracts[0].id, contractValue: contracts[0].contractValue }));
+                setStep(3);
+            } else {
+                setCommission(p => ({ ...p, contractId: '', contractValue: 0 }));
+            }
+        } else {
+            setActiveContracts([]);
+        }
+    }, [commission.clientId, clients]);
+
+    const handleSelectContract = (contractId) => {
+        const contract = activeContracts.find(c => c.id === contractId);
+        setCommission(p => ({ ...p, contractId: contract.id, contractValue: contract.contractValue }));
+    };
+
+    const handleSave = () => {
+        const client = clients.find(c => c.id === commission.clientId);
+        const dataToSave = { ...commission, clientName: client.general.companyName || client.general.holderName, paymentStatus: 'Pendente' };
+        onSave(dataToSave);
+    };
+
+    const isStepComplete = (stepNum) => {
+        if (stepNum === 1) return !!commission.clientId;
+        if (stepNum === 2) return !!commission.contractId;
+        if (stepNum === 3) return !!commission.brokerId;
+        return false;
+    };
+
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title="Lançar Nova Comissão" size="5xl">
+            <div className="flex border-b border-gray-200 dark:border-white/10 pb-4 mb-6">
+                {steps.map((s, index) => (
+                    <React.Fragment key={s.id}>
+                        <div className="flex flex-col items-center">
+                            <div className={cn("w-10 h-10 rounded-full flex items-center justify-center transition-all", step >= s.id ? 'bg-cyan-500 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-500')}>
+                                {step > s.id ? <CheckSquareIcon className="w-6 h-6"/> : <s.icon className="w-6 h-6"/>}
+                            </div>
+                            <p className={cn("mt-2 text-sm font-semibold", step >= s.id ? "text-cyan-600 dark:text-cyan-400" : "text-gray-500")}>{s.name}</p>
+                        </div>
+                        {index < steps.length - 1 && <div className={cn("flex-1 h-0.5 mt-5 transition-all", step > s.id ? 'bg-cyan-500' : 'bg-gray-200 dark:bg-gray-700')} />}
+                    </React.Fragment>
+                ))}
+            </div>
+
+            <div className="min-h-[250px]">
+                {step === 1 && (
+                    <div>
+                        <Label>1. Selecione o Cliente</Label>
+                        <Select value={commission.clientId} onChange={(e) => setCommission(p => ({ ...p, clientId: e.target.value }))}>
+                            <option value="">Selecione...</option>
+                            {clients.map(c => <option key={c.id} value={c.id}>{c.general.companyName || c.general.holderName}</option>)}
+                        </Select>
+                    </div>
+                )}
+                 {step === 2 && (
+                    <div>
+                        <Label>2. Selecione o Contrato Ativo</Label>
+                        <Select value={commission.contractId} onChange={(e) => handleSelectContract(e.target.value)}>
+                            <option value="">Selecione...</option>
+                            {activeContracts.map(c => <option key={c.id} value={c.id}>{c.planOperator} - {formatCurrency(c.contractValue)} - Início: {formatDate(c.effectiveDate)}</option>)}
+                        </Select>
+                    </div>
+                )}
+                {step === 3 && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <Label>3. Vincule o Corretor</Label>
+                            <Select value={commission.brokerId} onChange={(e) => setCommission(p => ({ ...p, brokerId: e.target.value }))}>
+                                 <option value="">Selecione...</option>
+                                 {users.filter(u => u.permissionLevel === 'Corretor').map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                            </Select>
+                        </div>
+                         <div>
+                            <Label>Vincule o Supervisor (Opcional)</Label>
+                            <Select value={commission.supervisorId} onChange={(e) => setCommission(p => ({ ...p, supervisorId: e.target.value }))}>
+                                 <option value="">Nenhum</option>
+                                 {users.filter(u => u.permissionLevel === 'Supervisor').map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                            </Select>
+                        </div>
+                    </div>
+                )}
+                 {step === 4 && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <div><Label>Valor do Contrato (Base)</Label><p className="h-10 font-bold flex items-center px-3 text-gray-700 dark:text-gray-300">{formatCurrency(commission.contractValue)}</p></div>
+                        <div><Label>Taxa de Comissão (%)</Label><Input type="number" value={commission.commissionRate} onChange={(e) => setCommission(p => ({...p, commissionRate: e.target.value}))} placeholder="Ex: 3.5"/></div>
+                         <div><Label>Forma de Pagamento</Label><Select value={commission.paymentStructure} onChange={(e) => setCommission(p => ({...p, paymentStructure: e.target.value}))}><option>À Vista</option><option>Parcelado</option></Select></div>
+                        {commission.paymentStructure === 'Parcelado' && (<div><Label>Nº de Parcelas</Label><Input type="number" value={commission.installmentsTotal} onChange={(e) => setCommission(p => ({...p, installmentsTotal: e.target.value}))}/></div>)}
+                        <div><Label>Data do 1º Vencimento</Label><DateField value={commission.firstDueDate} onChange={(e) => setCommission(p => ({...p, firstDueDate: e.target.value}))}/></div>
+                    </div>
+                )}
+            </div>
+
+            <div className="flex justify-between items-center pt-6 border-t border-gray-200 dark:border-white/10">
+                <Button variant="outline" onClick={() => setStep(s => Math.max(1, s - 1))} disabled={step === 1}>Voltar</Button>
+                {step < 4 ? (
+                    <Button onClick={() => setStep(s => s + 1)} disabled={!isStepComplete(step)}>Avançar</Button>
+                ) : (
+                    <Button onClick={handleSave} variant="violet"><SparklesIcon className="h-4 w-4 mr-2"/>Salvar Comissão</Button>
+                )}
+            </div>
+        </Modal>
+    )
+};
+
+function CommissionsPage() {
+    const { commissions, addCommission, updateCommission, deleteCommission, loading, users } = useData();
+    const { toast } = useToast();
+    const [isWizardOpen, setWizardOpen] = useState(false);
+
+    const handleSave = async (commissionData) => {
+        const result = await addCommission(commissionData);
+        if (result) {
+            toast({ title: "Sucesso!", description: `Comissão para ${result.clientName} foi lançada.` });
+            setWizardOpen(false);
+        } else {
+            toast({ title: "Erro", description: "Não foi possível salvar a comissão.", variant: 'destructive' });
+        }
+    };
+
+    return (
+        <div className="p-4 sm:p-6 lg:p-8">
+            <div className="flex justify-between items-center mb-6">
+                <h2 className="text-3xl font-bold text-gray-900 dark:text-white">Gestão de Comissões</h2>
+                <Button onClick={() => setWizardOpen(true)} variant="violet"><PlusCircleIcon className="h-5 w-5 mr-2" /> Lançar Nova Comissão</Button>
+            </div>
+            <GlassPanel>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full">
+                        <thead className="border-b border-gray-200 dark:border-white/10">
+                            <tr>
+                                {['Cliente', 'Corretor', 'Valor Comissão', 'Status', 'Vencimento'].map(h => <th key={h} scope="col" className="px-6 py-4 text-left text-sm font-semibold text-gray-500 dark:text-gray-300 tracking-wider">{h}</th>)}
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200 dark:divide-white/10">
+                            {loading && commissions.length === 0 ? (Array.from({ length: 3 }).map((_, i) => <SkeletonRow key={i} />)) : 
+                            commissions.length > 0 ? (commissions.map(com => {
+                                const broker = users.find(u => u.id === com.brokerId);
+                                const totalCommission = (com.contractValue || 0) * ((com.commissionRate || 0) / 100);
+                                return (
+                                    <tr key={com.id} className="hover:bg-gray-100/50 dark:hover:bg-cyan-500/5 cursor-pointer">
+                                        <td className="px-6 py-4 whitespace-nowrap font-medium text-gray-900 dark:text-white">{com.clientName}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">{broker?.name || 'N/A'}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-700 dark:text-white">{formatCurrency(totalCommission)}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap"><Badge>{com.paymentStatus}</Badge></td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{formatDate(com.firstDueDate)}</td>
+                                    </tr>
+                                )
+                            })) : (
+                                <tr><td colSpan="5"><EmptyState title="Nenhuma Comissão Lançada" message="Comece lançando sua primeira comissão para vê-la aqui." actionText="Lançar Nova Comissão" onAction={() => setWizardOpen(true)} /></td></tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </GlassPanel>
+            <CommissionWizardModal isOpen={isWizardOpen} onClose={() => setWizardOpen(false)} onSave={handleSave} />
+        </div>
+    );
+}
 function LoginPage() { const { login } = useAuth(); const { toast } = useToast(); const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [loading, setLoading] = useState(false); const handleSubmit = async (e) => { e.preventDefault(); setLoading(true); const result = await login(email, password); if (!result.success) { toast({ title: "Falha na Autenticação", description: "Credenciais inválidas.", variant: "destructive" }); } setLoading(false); }; return (<div className="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-[#0D1117] p-4"><GlassPanel className="w-full max-w-sm p-8"><h1 className="text-3xl font-bold text-center text-gray-900 dark:text-white mb-2">OLYMPUS X</h1><p className="text-center text-gray-500 dark:text-gray-400 mb-8">Acesso ao Ecossistema</p><form onSubmit={handleSubmit} className="space-y-6"><div><Label htmlFor="email">Email</Label><Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className="mt-2" /></div><div><Label htmlFor="password">Senha</Label><Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required className="mt-2" /></div><Button type="submit" variant="default" className="w-full !h-12 !text-base" disabled={loading}>{loading ? 'Autenticando...' : 'Entrar'}</Button></form></GlassPanel></div>); }
 function ClientForm({ client, onSave, onCancel, isConversion = false, leadData = null, initialTab = 'general' }) {
     const [formData, setFormData] = useState({});
@@ -547,16 +1001,23 @@ function ClientForm({ client, onSave, onCancel, isConversion = false, leadData =
     const [titularInfo, setTitularInfo] = useState({ age: null, imc: { value: null, classification: '' }});
     const [activeTab, setActiveTab] = useState(initialTab || 'general');
 
+    const handleBeneficiariesChange = useCallback((newBeneficiariesArray) => {
+    setFormData(currentFormData => ({
+        ...currentFormData,
+        beneficiaries: newBeneficiariesArray
+    }));
+}, []);
+
     useEffect(() => {
-        const defaultData = {
-            general: { status: 'Ativo', clientType: 'PME', dob: '', weight: '', height: '' },
-            contracts: [],
-            internal: {},
-            beneficiaries: [],
-            observations: [],
-            commission: {},
-            boletoExceptions: []
-        };
+       const defaultData = {
+    general: { status: 'Ativo', clientType: 'PME', contactRole: '', isResponsibleBeneficiary: 'Sim' },
+    contracts: [],
+    internal: {},
+    beneficiaries: [],
+    observations: [],
+    commission: {},
+    boletoExceptions: []
+};
         if (isConversion && leadData) {
             const conversionData = {
                 ...defaultData,
@@ -653,19 +1114,14 @@ function ClientForm({ client, onSave, onCancel, isConversion = false, leadData =
                         <TabsList>
                             <TabsTrigger value="general">Visão Geral</TabsTrigger>
                             <TabsTrigger value="contracts">Contratos</TabsTrigger>
-                            <TabsTrigger value="commission">Comissões</TabsTrigger>
+
                             <TabsTrigger value="beneficiaries">Beneficiários</TabsTrigger>
                             <TabsTrigger value="history">Histórico</TabsTrigger>
                             <TabsTrigger value="internal">Dados Internos</TabsTrigger>
                         </TabsList>
                         <TabsContent value="general">
                             <GeneralInfoForm formData={formData} handleChange={handleChange} errors={errors} />
-                            {(titularInfo.age !== null || titularInfo.imc.value) && (
-                                <GlassPanel className="p-4 mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    {titularInfo.age !== null && (<div><Label>Idade do Titular</Label><p className="text-gray-800 dark:text-gray-100 mt-1">{titularInfo.age} anos</p></div>)}
-                                    {titularInfo.imc.value && (<div><Label>IMC do Titular</Label><p className="text-gray-800 dark:text-gray-100 mt-1">{titularInfo.imc.value} - {titularInfo.imc.classification}</p></div>)}
-                                </GlassPanel>
-                            )}
+
                         </TabsContent>
                         <TabsContent value="contracts">
                             <div className="flex justify-between items-center mb-4">
@@ -681,13 +1137,12 @@ function ClientForm({ client, onSave, onCancel, isConversion = false, leadData =
                                 ))}
                             </div>
                         </TabsContent>
-                        <TabsContent value="commission"><CommissionForm formData={formData} handleChange={handleChange} /></TabsContent>
                         <TabsContent value="beneficiaries">
                             <BeneficiariesForm 
-                                beneficiaries={formData.beneficiaries || []} 
-                                setBeneficiaries={(b) => setFormData(p => ({...p, beneficiaries: b}))} 
-                                toast={toast} 
-                            />
+    beneficiaries={formData.beneficiaries || []} 
+    setBeneficiaries={handleBeneficiariesChange}
+    toast={toast} 
+/>
                         </TabsContent>
                         <TabsContent value="history"><HistoryForm observations={formData.observations || []} setObservations={(o) => setFormData(p => ({...p, observations: o}))} /></TabsContent>
                         <TabsContent value="internal"><InternalDataForm formData={formData} handleChange={handleChange} /></TabsContent>
@@ -726,54 +1181,30 @@ function ClientDetails({ client, onBack, onEdit }) {
     };
     
     const OverviewTab = ({ client }) => {
-        const age = useMemo(() => calculateAge(client?.general?.dob), [client?.general?.dob]);
-        const imc = useMemo(() => {
-            const weight = parseFloat(client?.general?.weight);
-            const height = parseFloat(client?.general?.height);
-            if (weight > 0 && height > 0) {
-                const heightInMeters = height / 100;
-                const imcValue = weight / (heightInMeters * heightInMeters);
-                let classification = '';
-                if (imcValue < 18.5) classification = 'Abaixo do peso';
-                else if (imcValue >= 18.5 && imcValue <= 24.9) classification = 'Normal';
-                else if (imcValue >= 25 && imcValue <= 29.9) classification = 'Sobrepeso';
-                else if (imcValue >= 30) classification = 'Obesidade';
-                return { value: imcValue.toFixed(2), classification };
-            }
-            return { value: null, classification: '' };
-        }, [client?.general?.weight, client?.general?.height]);
+    return (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-6">
+            {/* --- LINHA 1 (ORDEM AJUSTADA) --- */}
+            <DetailItem label="Nome Empresa" value={client?.general?.companyName} />
+            <DetailItem label="Tipo de Contrato" value={client?.general?.clientType} />
+            <DetailItem label="Status" value={client?.general?.status} />
 
-        return (
-            <>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-1">
-                    <DetailItem label="Status" value={client?.general?.status} />
-                    <DetailItem label="Tipo de Pessoa" value={client?.general?.clientType} />
-                    <DetailItem label="Nome Empresa/Cliente" value={client?.general?.companyName} />
-                    {client?.general?.clientType === 'PME' && (<>
-                        <DetailItem label="CNPJ" value={client?.general?.cnpj} />
-                        <DetailItem label="Nome do Responsável" value={client?.general?.responsibleName} />
-                        <DetailItem label="CPF do Responsável" value={client?.general?.responsibleCpf} />
-                    </>)}
-                    <DetailItem label="Nome do Titular" value={client?.general?.holderName} />
-                    <DetailItem label="CPF do Titular" value={client?.general?.holderCpf} />
-                    <DetailItem label="E-mail" value={client?.general?.email} />
-                    <DetailItem label="Telefone (Cliente)" value={client?.general?.phone} />
-                    <DetailItem label="Contato (Recados)" value={client?.general?.contactName} />
-                    <DetailItem label="Telefone (Contato)" value={client?.general?.contactPhone} />
-                    <DetailItem label="Data de Nasc. (Titular)" value={formatDate(client?.general?.dob)} />
-                    <DetailItem label="Peso (kg)" value={client?.general?.weight ? `${client.general.weight} kg` : 'N/A'} />
-                    <DetailItem label="Altura (cm)" value={client?.general?.height ? `${client.general.height} cm` : 'N/A'}/>
-                </div>
-                {(age !== null || imc.value) && (
-                     <GlassPanel className="p-4 mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {age !== null && (<div><Label>Idade do Titular</Label><p className="text-gray-800 dark:text-gray-100 mt-1 text-md">{age} anos</p></div>)}
-                        {imc.value && (<div><Label>IMC do Titular</Label><p className="text-gray-800 dark:text-gray-100 mt-1 text-md">{imc.value} - {imc.classification}</p></div>)}
-                    </GlassPanel>
-                )}
-            </>
-        );
-    };
+            {/* --- LINHA 2 --- */}
+            <DetailItem label="CNPJ" value={client?.general?.cnpj} />
+            <DetailItem label="Nome do Responsável" value={client?.general?.responsibleName} />
+            <DetailItem label="CPF do Responsável" value={client?.general?.responsibleCpf} />
 
+            {/* --- LINHA 3 --- */}
+            <DetailItem label="Responsável" value={client?.general?.responsibleStatus} />
+            <DetailItem label="Email Responsável" value={client?.general?.email} />
+            <DetailItem label="Telefone Responsável" value={client?.general?.holderCpf} />
+
+            {/* --- LINHA 4 --- */}
+            <DetailItem label="Nome do Contato" value={client?.general?.phone} />
+            <DetailItem label="Cargo do Contato" value={client?.general?.contactRole} />
+            <DetailItem label="Telefone do Contato" value={client?.general?.contactPhone} />
+        </div>
+    );
+  };
     return (
         <div className="p-4 sm:p-6 lg:p-8">
             <div className="flex justify-between items-start mb-6 gap-4">
@@ -791,7 +1222,6 @@ function ClientDetails({ client, onBack, onEdit }) {
                     <TabsList>
                         <TabsTrigger value="overview">Visão Geral</TabsTrigger>
                         <TabsTrigger value="contract">Contratos</TabsTrigger>
-                        <TabsTrigger value="commission">Comissões</TabsTrigger>
                         <TabsTrigger value="beneficiaries">Beneficiários</TabsTrigger>
                         <TabsTrigger value="history">Histórico</TabsTrigger>
                         <TabsTrigger value="internal">Interno</TabsTrigger>
@@ -799,7 +1229,6 @@ function ClientDetails({ client, onBack, onEdit }) {
                     </TabsList>
                     <TabsContent value="overview"><OverviewTab client={client} /></TabsContent>
                     <TabsContent value="contract"><ContractManager client={client} onBack={onBack} onEdit={onEdit} /></TabsContent>
-                    <TabsContent value="commission"><CommissionDetailsTab client={client} /></TabsContent>
                     <TabsContent value="beneficiaries"><BeneficiariesTab client={client} /></TabsContent>
                     <TabsContent value="history"><HistoryTab client={client} /></TabsContent>
                     <TabsContent value="internal"><InternalTab client={client} /></TabsContent>
@@ -811,144 +1240,518 @@ function ClientDetails({ client, onBack, onEdit }) {
 };
 function CorporatePage({ onNavigate }) { const { users, operators, addOperator, deleteOperator, companyProfile, updateCompanyProfile } = useData(); const { user, addUser, deleteUser } = useAuth(); const { toast } = useToast(); const confirm = useConfirm(); const [isUserModalOpen, setUserModalOpen] = useState(false); const [isOperatorModalOpen, setOperatorModalOpen] = useState(false); const [companyData, setCompanyData] = useState({}); useEffect(() => { setCompanyData(companyProfile || {}); }, [companyProfile]); const handleCompanyDataChange = (e) => setCompanyData(prev => ({ ...prev, [e.target.name]: e.target.value })); const handleSaveCompanyProfile = async () => { const success = await updateCompanyProfile(companyData); toast({ title: success ? "Sucesso" : "Erro", description: success ? "Dados da empresa atualizados." : "Não foi possível salvar os dados.", variant: success ? 'default' : 'destructive' }); }; const handleDeleteOperator = async (operator) => { try { await confirm({ title: `Remover ${operator.name}?`, description: "Tem a certeza?" }); const success = await deleteOperator(operator.id, operator.name); toast({ title: success ? "Removida" : "Erro", description: `${operator.name} foi ${success ? 'removida' : 'impossível de remover'}.`, variant: success ? 'default' : 'destructive' }); } catch (e) {} }; const handleDeleteUser = async (userToDelete) => { if (userToDelete.id === user.id) { toast({ title: "Ação Inválida", description: "Não pode excluir a própria conta.", variant: "destructive" }); return; } try { await confirm({ title: `Excluir ${userToDelete.name}?`, description: "Tem certeza?" }); const success = await deleteUser(userToDelete.id); toast({ title: success ? "Removido" : "Erro", description: `${userToDelete.name} foi ${success ? 'removido' : 'impossível de remover'}.`, variant: success ? 'default' : 'destructive' }); } catch (e) {} }; const handleAddOperator = async (newOperatorData) => { const success = await addOperator(newOperatorData); toast({ title: success ? "Adicionada" : "Erro", description: `${newOperatorData.name} foi ${success ? 'adicionada' : 'impossível de adicionar'}.`, variant: success ? 'default' : 'destructive' }); if (success) setOperatorModalOpen(false); }; const handleAddUser = async (newUserData) => { const result = await addUser(newUserData); toast({ title: result.success ? "Adicionado" : "Erro", description: result.success ? `${newUserData.name} foi adicionado.` : `Erro: ${result.code}`, variant: result.success ? 'default' : 'destructive' }); if (result.success) setUserModalOpen(false); }; return (<div className="p-4 sm:p-6 lg:p-8"><h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-6">Gestão Corporativa</h2><GlassPanel className="p-6"><Tabs defaultValue="collaborators"><TabsList><TabsTrigger value="collaborators">Colaboradores</TabsTrigger><TabsTrigger value="operators">Operadoras</TabsTrigger><TabsTrigger value="company">Minha Empresa</TabsTrigger></TabsList><TabsContent value="collaborators"><div className="flex justify-between items-center mb-4"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80">Utilizadores</h3><Button onClick={() => setUserModalOpen(true)}><PlusCircleIcon className="h-4 w-4 mr-2" />Adicionar</Button></div><div className="bg-gray-100 dark:bg-black/20 rounded-lg p-4 space-y-3">{users.map(u => (<div key={u.id} className="flex justify-between items-center bg-gray-200/70 dark:bg-gray-800/70 p-3 rounded-md"><div><p className="font-medium text-gray-900 dark:text-white">{u?.name}</p><p className="text-sm text-gray-600 dark:text-gray-400">{u?.email} - <span className="font-semibold">{u?.permissionLevel}</span></p></div><Button variant="ghost" size="icon" className="h-8 w-8 text-red-500/70 hover:text-red-400" onClick={() => handleDeleteUser(u)} disabled={u.id === user.id}><Trash2Icon className="h-4 w-4" /></Button></div>))}</div></TabsContent><TabsContent value="operators"><div className="flex justify-between items-center mb-4"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80">Operadoras</h3><Button onClick={() => setOperatorModalOpen(true)}><PlusCircleIcon className="h-4 w-4 mr-2" />Adicionar</Button></div><div className="bg-gray-100 dark:bg-black/20 rounded-lg p-4 space-y-3">{operators.map(op => (<div key={op.id} className="flex justify-between items-center bg-gray-200/70 dark:bg-gray-800/70 p-3 rounded-md"><p className="font-medium text-gray-900 dark:text-white">{op.name}</p><Button variant="ghost" size="icon" className="h-8 w-8 text-red-500/70 hover:text-red-400" onClick={() => handleDeleteOperator(op)}><Trash2Icon className="h-4 w-4" /></Button></div>))}</div></TabsContent><TabsContent value="company"><FormSection title="Dados da Empresa"><div><Label>Nome da Empresa</Label><Input name="companyName" value={companyData.companyName || ''} onChange={handleCompanyDataChange} /></div><div><Label>CNPJ</Label><Input name="cnpj" value={companyData.cnpj || ''} onChange={handleCompanyDataChange} /></div><div><Label>Endereço</Label><Input name="address" value={companyData.address || ''} onChange={handleCompanyDataChange} /></div></FormSection><div className="flex justify-end"><Button onClick={handleSaveCompanyProfile}>Salvar</Button></div></TabsContent></Tabs></GlassPanel><AddCollaboratorModal isOpen={isUserModalOpen} onClose={() => setUserModalOpen(false)} onSave={handleAddUser} /><AddOperatorModal isOpen={isOperatorModalOpen} onClose={() => setOperatorModalOpen(false)} onSave={handleAddOperator} /></div>); };
 function CalendarPage({ onNavigate }) {
-    const { clients, updateClient } = useData();
+    const { clients, tasks, commissions, users, completedEvents, toggleEventCompletion, updateClient } = useData();
     const { toast } = useToast();
     const [currentDate, setCurrentDate] = useState(new Date());
+    const [selectedDate, setSelectedDate] = useState(new Date());
     const [selectedEvent, setSelectedEvent] = useState(null);
-    const [isChangeEventModalOpen, setChangeEventModalOpen] = useState(false);
-    const [newDate, setNewDate] = useState('');
+    const [isDetailModalOpen, setDetailModalOpen] = useState(false);
+    const [newDateForEvent, setNewDateForEvent] = useState('');
+    const [selectedCredentialId, setSelectedCredentialId] = useState('');
 
-    const events = useMemo(() => {
+
+
+    const allEvents = useMemo(() => {
         const generatedEvents = [];
+        const addEvent = (event) => { if (event.date && !isNaN(event.date.getTime())) { generatedEvents.push(event); } };
+
         clients.forEach(client => {
             (client.contracts || []).forEach(contract => {
-                const end = contract.dataFimContrato ? new Date(contract.dataFimContrato + 'T00:00:00') : new Date(new Date().getFullYear() + 5, 0, 1);
-                
-                // Eventos de Envio de Boleto
+                const end = contract.renewalDate ? new Date(contract.renewalDate + 'T23:59:59') : new Date(new Date().getFullYear() + 5, 0, 1);
                 if (contract.boletoSentDate) {
                     let current = new Date(contract.boletoSentDate + 'T00:00:00');
-                    while(current <= end) {
+                    while (current <= end) {
                         const originalDateStr = current.toISOString().split('T')[0];
                         const exception = (client.boletoExceptions || []).find(ex => ex.originalDate === originalDateStr);
-                        const eventDate = exception ? new Date(exception.modifiedDate + 'T00:00:00') : new Date(originalDateStr + 'T00:00:00');
-
-                        generatedEvents.push({ type: 'boletoSend', id: `boleto-${client.id}-${contract.id}-${originalDateStr}`, date: eventDate, data: { client, contract, originalDate: originalDateStr }, title: `Boleto: ${client.general.holderName}`, color: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/70 dark:text-cyan-200 hover:bg-cyan-200 dark:hover:bg-cyan-800', icon: FileTextIcon });
+                        const eventDate = exception ? new Date(exception.modifiedDate + 'T00:00:00') : new Date(originalDateStr);
+                        const eventId = `boleto-${client.id}-${contract.id}-${originalDateStr}`;
+                        addEvent({ type: 'boletoSend', id: eventId, date: eventDate, data: { client, contract, originalDate: originalDateStr }, title: `Envio Boleto: ${client.general.holderName || client.general.companyName}`, color: 'bg-cyan-500', icon: FileTextIcon });
                         current.setMonth(current.getMonth() + 1);
                     }
                 }
-                // Eventos de Vencimento de Boleto
-                if (contract.monthlyDueDate) {
+                if (contract.monthlyDueDate && contract.effectiveDate) {
                     let current = new Date(contract.effectiveDate + 'T00:00:00');
-                     while(current <= end) {
+                    while(current <= end) {
                         const dueDate = new Date(current.getFullYear(), current.getMonth(), parseInt(contract.monthlyDueDate, 10));
-                        generatedEvents.push({ type: 'boletoDue', id: `due-${client.id}-${contract.id}-${dueDate.toISOString()}`, date: dueDate, data: { client, contract }, title: `Vencimento: ${client.general.holderName}`, color: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/70 dark:text-yellow-200 hover:bg-yellow-200 dark:hover:bg-yellow-800', icon: AlertTriangleIcon });
+                        addEvent({ type: 'boletoDue', id: `due-${client.id}-${contract.id}-${dueDate.toISOString()}`, date: dueDate, data: { client, contract }, title: `Vencimento: ${client.general.holderName || client.general.companyName}`, color: 'bg-yellow-500', icon: AlertTriangleIcon });
                         current.setMonth(current.getMonth() + 1);
                     }
                 }
-                // Evento de Fim de Contrato
-                if (contract.dataFimContrato) {
-                    generatedEvents.push({ type: 'contractEnd', id: `contract-${client.id}-${contract.id}`, date: new Date(contract.dataFimContrato + 'T00:00:00'), data: { client, contract }, title: `Fim Contrato: ${client.general.holderName}`, color: 'bg-red-100 text-red-800 dark:bg-red-900/70 dark:text-red-200 hover:bg-red-200 dark:hover:bg-red-800', icon: ShieldCheckIcon });
+                if (contract.renewalDate) {
+                    addEvent({ type: 'renewal', id: `renewal-${client.id}-${contract.id}`, date: new Date(contract.renewalDate + 'T00:00:00'), data: { client, contract }, title: `Renovação: ${client.general.holderName || client.general.companyName}`, color: 'bg-violet-500', icon: AwardIcon });
                 }
             });
         });
 
-        const eventsByDay = {};
-        generatedEvents.forEach(event => {
-            if (event.date.getFullYear() === currentDate.getFullYear() && event.date.getMonth() === currentDate.getMonth()) {
-                const day = event.date.getDate();
-                if (!eventsByDay[day]) eventsByDay[day] = [];
-                eventsByDay[day].push(event);
+        tasks.forEach(task => {
+            if (task.priority === 'Alta' && task.dueDate) {
+                addEvent({ type: 'task', id: `task-${task.id}`, date: new Date(task.dueDate + 'T00:00:00'), data: { task }, title: `Tarefa: ${task.title}`, color: 'bg-red-500', icon: CheckSquareIcon });
             }
         });
-        return eventsByDay;
-    }, [clients, currentDate]);
 
-    const handleOpenEvent = (event) => {
-        if (event.type === 'boletoSend') {
-            setSelectedEvent(event);
-            setNewDate('');
-            setChangeEventModalOpen(true);
+        commissions.forEach(com => {
+            if (com.firstDueDate) {
+                addEvent({ type: 'commission', id: `commission-${com.id}`, date: new Date(com.firstDueDate + 'T00:00:00'), data: { commission: com }, title: `Comissão: ${com.clientName}`, color: 'bg-green-500', icon: DollarSignIcon });
+            }
+        });
+
+        return generatedEvents;
+    }, [clients, tasks, commissions]);
+
+    const completedEventIds = useMemo(() => new Set(completedEvents.map(e => e.eventId)), [completedEvents]);
+
+    const eventsByDay = useMemo(() => {
+        const eventsMap = {};
+        allEvents.forEach(event => {
+            const dayKey = event.date.toISOString().split('T')[0];
+            if (!eventsMap[dayKey]) eventsMap[dayKey] = [];
+            eventsMap[dayKey].push(event);
+        });
+        return eventsMap;
+    }, [allEvents]);
+
+    const handleOpenEventDetails = (event) => {
+        setSelectedEvent(event);
+        setNewDateForEvent('');
+        const credentials = event.data?.contract?.credentialsList || [];
+        if (credentials.length === 1) {
+            setSelectedCredentialId(credentials[0].id);
         } else {
-            // Para outros tipos de evento, pode-se manter o modal simples
-            setSelectedEvent(event);
+            setSelectedCredentialId('');
         }
+        setDetailModalOpen(true);
     };
-    
+
     const handleDateChange = async () => {
-        if (!selectedEvent || !newDate) return;
+        if (!selectedEvent || !newDateForEvent || selectedEvent.type !== 'boletoSend') return;
         const { client, originalDate } = selectedEvent.data;
         const exceptions = client.boletoExceptions || [];
         const existingIndex = exceptions.findIndex(ex => ex.originalDate === originalDate);
         if (existingIndex > -1) {
-            exceptions[existingIndex].modifiedDate = newDate;
+            exceptions[existingIndex].modifiedDate = newDateForEvent;
         } else {
-            exceptions.push({ originalDate: originalDate, modifiedDate: newDate });
+            exceptions.push({ originalDate: originalDate, modifiedDate: newDateForEvent });
         }
-        await updateClient(client.id, { ...client, boletoExceptions: exceptions });
-        toast({ title: 'Data Alterada!', description: `A data do boleto foi alterada para este mês.`});
-        setChangeEventModalOpen(false);
-        setSelectedEvent(null);
+        const success = await updateClient(client.id, { ...client, boletoExceptions: exceptions });
+        if(success) {
+            toast({ title: 'Data Alterada!', description: `A data do boleto foi alterada para este mês.`});
+            setDetailModalOpen(false);
+        } else {
+            toast({ title: 'Erro', description: 'Não foi possível alterar a data.', variant: 'destructive'});
+        }
+    };
+
+    const handleActionClick = () => {
+        if (!selectedEvent) return;
+        setDetailModalOpen(false);
+        if (selectedEvent.type === 'task') {
+            onNavigate('tasks');
+        } else {
+            const clientId = selectedEvent.data.client?.id || selectedEvent.data.commission?.clientId;
+            if (clientId) {
+                onNavigate('client-details', clientId);
+            }
+        }
     };
 
     const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
-    const lastDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
-    const daysInMonth = Array.from({ length: lastDayOfMonth.getDate() }, (_, i) => i + 1);
+    const daysInMonth = Array.from({ length: new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate() }, (_, i) => new Date(currentDate.getFullYear(), currentDate.getMonth(), i + 1));
     const startingDay = firstDayOfMonth.getDay();
     const changeMonth = (offset) => setCurrentDate(prev => new Date(prev.getFullYear(), prev.getMonth() + offset, 1));
 
-    return (<div className="p-4 sm:p-6 lg:p-8">
-        <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-6">Calendário Inteligente</h2>
-        <GlassPanel className="p-6">
-            <div className="flex flex-col md:flex-row justify-between items-center mb-4 gap-4">
-                <div className="flex items-center">
-                    <Button variant="ghost" size="icon" onClick={() => changeMonth(-1)}><ChevronLeftIcon /></Button>
-                    <h3 className="text-xl font-semibold text-gray-900 dark:text-white capitalize w-48 text-center">{currentDate.toLocaleString('pt-BR', { month: 'long', year: 'numeric' })}</h3>
-                    <Button variant="ghost" size="icon" onClick={() => changeMonth(1)}><ChevronRightIcon /></Button>
+    const selectedDayEvents = eventsByDay[selectedDate.toISOString().split('T')[0]] || [];
+
+    const EventDetailContent = () => {
+        if (!selectedEvent) return null;
+
+        const credentials = selectedEvent.data?.contract?.credentialsList || [];
+        const selectedCred = credentials.find(c => c.id === selectedCredentialId);
+
+        return (
+             <div>
+                <div className="space-y-4">
+                    <div className="flex items-center gap-3"><div className={cn("w-10 h-10 rounded-lg flex-shrink-0 flex items-center justify-center text-white", selectedEvent.color)}><selectedEvent.icon className="w-6 h-6" /></div><h3 className="text-xl font-bold">{selectedEvent.title}</h3></div>
+                    <DetailItem label="Responsável" value={ (selectedEvent.type === 'boletoSend' && users.find(u => u.id === selectedEvent.data.contract.boletoResponsibleId)?.name) || (selectedEvent.type === 'task' && users.find(u => u.id === selectedEvent.data.task.assignedTo)?.name) || 'N/A' } />
+
+                    {selectedEvent.type === 'boletoSend' && (
+                        <div className="mt-4 pt-4 border-t border-gray-200/50 dark:border-white/10">
+                            <h5 className="text-md font-bold text-gray-700 dark:text-gray-200 mb-2">Credenciais do Contrato</h5>
+                            {credentials.length === 0 && <p className="text-sm text-gray-500">Nenhuma credencial cadastrada.</p>}
+                            {credentials.length > 1 && (
+                                <Select value={selectedCredentialId} onChange={(e) => setSelectedCredentialId(e.target.value)} className="mb-4">
+                                    <option value="">Selecione a credencial...</option>
+                                    {credentials.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+                                </Select>
+                            )}
+                            {selectedCred && (
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1">
+                                    <DetailItem label="Email Criado" value={selectedCred.createdEmail} /><DetailItem label="Senha do Email" value={selectedCred.createdEmailPassword} isPassword />
+                                    <DetailItem label="Site do Portal" value={selectedCred.portalSite} isLink /><DetailItem label="Senha do Portal" value={selectedCred.portalPassword} isPassword />
+                                    <DetailItem label="Login do Portal" value={selectedCred.portalLogin} /><DetailItem label="Usuário do Portal" value={selectedCred.portalUser} />
+                                    <DetailItem label="Login do App" value={selectedCred.appLogin} /><DetailItem label="Senha do App" value={selectedCred.appPassword} isPassword />
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {selectedEvent.type === 'boletoSend' && 
+                        <div className="pt-4 border-t border-gray-200 dark:border-white/10"><Label>Mudar Data (Apenas este mês)</Label><DateField value={newDateForEvent} onChange={(e) => setNewDateForEvent(e.target.value)} /></div>
+                    }
+                </div>
+                <div className="flex justify-between items-center pt-6 mt-4 border-t border-gray-200 dark:border-white/10">
+                    <label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={completedEventIds.has(selectedEvent.id)} onChange={(e) => toggleEventCompletion(selectedEvent, e.target.checked)} /> Marcar como Concluído</label>
+                    <div className="flex gap-2">
+                        {selectedEvent.type === 'boletoSend' && <Button onClick={handleDateChange} disabled={!newDateForEvent}>Salvar Nova Data</Button>}
+                        <Button variant="violet" onClick={handleActionClick}>{selectedEvent.type === 'task' ? 'Ir para Tarefa' : 'Ver Cliente'}</Button>
+                    </div>
                 </div>
             </div>
-            <div className="grid grid-cols-7 gap-1 text-center text-xs text-gray-500 dark:text-gray-400">{['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(day => <div key={day} className="p-2">{day}</div>)}</div>
-            <div className="grid grid-cols-7 gap-1">
-                {Array.from({ length: startingDay }).map((_, i) => <div key={`empty-${i}`} className="border border-transparent"></div>)}
-                {daysInMonth.map(day => (
-                    <div key={day} className="border border-gray-200 dark:border-white/10 p-2 h-32 flex flex-col hover:bg-gray-100 dark:hover:bg-white/5 transition-colors">
-                        <span className="font-bold text-gray-800 dark:text-white">{day}</span>
-                        {events[day] && (
-                            <div className="mt-1 flex-grow overflow-y-auto space-y-1 pr-1">
-                                {events[day].map(event => (
-                                    <div key={event.id} className={cn("text-xs rounded px-1.5 py-1 truncate cursor-pointer flex items-center gap-1.5", event.color)} onClick={() => handleOpenEvent(event)}>
-                                        <event.icon className="h-3 w-3 flex-shrink-0" />
-                                        <span className="flex-grow truncate">{event.title}</span>
+        )
+    }
+
+    return (
+        <div className="p-4 sm:p-6 lg:p-8 h-[calc(100vh-5rem)] flex flex-col">
+            <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-6 flex-shrink-0">Calendário Inteligente</h2>
+            <div className="flex-grow grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-0">
+                <GlassPanel className="p-6 lg:col-span-2 flex flex-col">
+                    <div className="flex justify-between items-center mb-4 flex-shrink-0"><Button variant="ghost" size="icon" onClick={() => changeMonth(-1)}><ChevronLeftIcon /></Button><h3 className="text-xl font-semibold text-gray-900 dark:text-white capitalize w-48 text-center">{currentDate.toLocaleString('pt-BR', { month: 'long', year: 'numeric' })}</h3><Button variant="ghost" size="icon" onClick={() => changeMonth(1)}><ChevronRightIcon /></Button></div>
+                    <div className="grid grid-cols-7 gap-1 text-center text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">{['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(day => <div key={day} className="p-2">{day}</div>)}</div>
+                    <div className="grid grid-cols-7 grid-rows-6 gap-1 flex-grow">
+                        {Array.from({ length: startingDay }).map((_, i) => <div key={`empty-${i}`} className="border border-transparent"></div>)}
+                        {daysInMonth.map(day => {
+                            const dayKey = day.toISOString().split('T')[0];
+                            const dayEvents = (eventsByDay[dayKey] || []).filter(e => !completedEventIds.has(e.id));
+                            const pins = dayEvents.reduce((acc, event) => { acc[event.color] = (acc[event.color] || 0) + 1; return acc; }, {});
+                            const isSelected = day.toDateString() === selectedDate.toDateString();
+                            return (
+                                <div key={dayKey} onClick={() => setSelectedDate(day)} className={cn("border border-gray-200 dark:border-white/10 p-2 flex flex-col hover:bg-gray-100 dark:hover:bg-white/5 transition-colors cursor-pointer", isSelected && "bg-cyan-100/50 dark:bg-cyan-900/30 ring-2 ring-cyan-500")}>
+                                    <span className="font-bold text-gray-800 dark:text-white">{day.getDate()}</span>
+                                    <div className="flex flex-wrap gap-1 mt-1">
+                                        {Object.entries(pins).map(([color, count]) => (<div key={color} className={cn("h-5 w-5 rounded-full flex items-center justify-center text-white text-[10px] font-bold", color)}>{count}</div>))}
                                     </div>
-                                ))}
-                            </div>
-                        )}
+                                </div>
+                            )
+                        })}
                     </div>
-                ))}
+                </GlassPanel>
+                <GlassPanel className="p-6 flex flex-col">
+                    <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-4 flex-shrink-0">Agenda do Dia <span className="text-cyan-500">{selectedDate.toLocaleDateString('pt-BR', {day: '2-digit', month: 'long'})}</span></h3>
+                    <div className="flex-grow overflow-y-auto space-y-3 pr-2">
+                        {selectedDayEvents.length > 0 ? selectedDayEvents.map(event => {
+                            const isCompleted = completedEventIds.has(event.id);
+                            return (
+                            <div key={event.id} className={cn("p-3 rounded-lg flex items-center gap-3 transition-colors", isCompleted ? "bg-gray-200/50 dark:bg-black/30" : "bg-gray-100/70 dark:bg-black/20")}>
+                                <Checkbox checked={isCompleted} onChange={(e) => toggleEventCompletion(event, e.target.checked)} />
+                                <div onClick={() => handleOpenEventDetails(event)} className="flex items-center gap-3 cursor-pointer flex-grow"><div className={cn("w-8 h-8 rounded-lg flex-shrink-0 flex items-center justify-center text-white", event.color, isCompleted && "opacity-50")}><event.icon className="w-5 h-5" /></div><p className={cn("text-sm font-medium text-gray-800 dark:text-gray-200 flex-grow truncate", isCompleted && "line-through text-gray-500")}>{event.title}</p></div>
+                            </div>
+                        )}) : (<div className="text-center text-gray-500 pt-16"><CalendarIcon className="h-10 w-10 mx-auto text-gray-400 dark:text-gray-600"/><p className="mt-2 text-sm">Nenhum evento para este dia.</p></div>)}
+                    </div>
+                </GlassPanel>
             </div>
-        </GlassPanel>
-        <Modal isOpen={isChangeEventModalOpen} onClose={() => setChangeEventModalOpen(false)} title="Detalhes do Evento de Boleto">
-             {selectedEvent && (
-                 <div className="space-y-4">
-                     <h3 className="text-xl font-bold">{selectedEvent.title}</h3>
-                     <DetailItem label="Cliente" value={selectedEvent.data.client.general.holderName} />
-                     <DetailItem label="Contrato" value={selectedEvent.data.contract.policyNumber} />
-                     <DetailItem label="Data Programada" value={formatDate(selectedEvent.data.originalDate)} />
-                     <div className="mt-4 pt-4 border-t border-gray-200 dark:border-white/10">
-                        <Label>Mudar Data (Apenas este mês)</Label>
-                        <DateField value={newDate} onChange={(e) => setNewDate(e.target.value)} />
-                        <div className="flex justify-end gap-2 mt-4">
-                           <Button variant="outline" onClick={() => onNavigate('client-details', selectedEvent.data.client.id)}>Ver Cliente</Button>
-                           <Button onClick={handleDateChange}>Salvar Nova Data</Button>
-                        </div>
-                     </div>
-                 </div>
-             )}
-        </Modal>
-    </div>);
+            <Modal isOpen={isDetailModalOpen} onClose={() => setDetailModalOpen(false)} title="Detalhes do Evento"><EventDetailContent /></Modal>
+        </div>
+    );
 };
+
 function ProfilePage() { const { user, updateUserProfile, updateUserPassword } = useAuth(); const { toast } = useToast(); const [name, setName] = useState(user?.name || ''); const [currentPassword, setCurrentPassword] = useState(''); const [newPassword, setNewPassword] = useState(''); const [confirmPassword, setConfirmPassword] = useState(''); useEffect(() => { if (user && user.name !== 'Usuário Incompleto') { setName(user.name); } }, [user]); const handleProfileUpdate = async (e) => { e.preventDefault(); const success = await updateUserProfile(user.uid, { name }); toast({ title: success ? "Sucesso" : "Erro", description: success ? "Nome atualizado." : "Não foi possível atualizar.", variant: success ? 'default' : 'destructive' }); }; const handlePasswordUpdate = async (e) => { e.preventDefault(); if (!currentPassword) { toast({ title: "Erro", description: "Insira sua senha atual.", variant: 'destructive' }); return; } if (newPassword !== confirmPassword) { toast({ title: "Erro", description: "As senhas não coincidem.", variant: 'destructive' }); return; } if (newPassword.length < 6) { toast({ title: "Erro", description: "A nova senha deve ter no mínimo 6 caracteres.", variant: 'destructive' }); return; } const result = await updateUserPassword(currentPassword, newPassword); if (result === true) { toast({ title: "Sucesso", description: "Senha atualizada." }); setCurrentPassword(''); setNewPassword(''); setConfirmPassword(''); } else { let errorMessage = "Não foi possível atualizar."; if (result === 'auth/wrong-password') errorMessage = "A senha atual está incorreta."; else if (result === 'auth/requires-recent-login') errorMessage = "Requer autenticação recente. Faça logout e login novamente."; toast({ title: "Erro", description: errorMessage, variant: 'destructive' }); } }; return (<div className="p-4 sm:p-6 lg:p-8"><h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-6">Meu Perfil</h2><div className="grid grid-cols-1 lg:grid-cols-2 gap-8"><GlassPanel className="p-6"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80 mb-6">Informações Pessoais</h3><form onSubmit={handleProfileUpdate} className="space-y-4"><div><Label>Foto</Label><div className="mt-2 flex items-center gap-4"><div className="w-20 h-20 rounded-full bg-violet-100 dark:bg-violet-900 flex items-center justify-center text-3xl font-bold text-violet-600 dark:text-violet-300 border-2 border-violet-300 dark:border-violet-700">{user?.name?.[0]}</div><Button type="button" variant="outline" disabled>Alterar Foto</Button></div></div><div><Label>Nome Completo</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div><div><Label>Email</Label><Input value={user?.email || ''} disabled /></div><div className="flex justify-end"><Button type="submit">Salvar</Button></div></form></GlassPanel><GlassPanel className="p-6"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80 mb-6">Alterar Senha</h3><form onSubmit={handlePasswordUpdate} className="space-y-4"><div><Label>Senha Atual</Label><Input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} required /></div><div><Label>Nova Senha</Label><Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required /></div><div><Label>Confirmar Nova Senha</Label><Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required /></div><div className="flex justify-end"><Button type="submit">Alterar Senha</Button></div></form></GlassPanel></div></div>); }
-function LeadsPage({ onNavigate }) { const { leads, updateLead, addLead } = useData(); const { toast } = useToast(); const confirm = useConfirm(); const [isModalOpen, setModalOpen] = useState(false); const [editingLead, setEditingLead] = useState(null); const handleDragEnd = async (item, targetColumnId) => { if (targetColumnId === 'Ganhos') { onNavigate('convert-lead', item.id); } else if (targetColumnId === 'Perdidos') { try { await confirm({ title: `Marcar ${item.name} como perdido?`, description: "Deseja agendar um novo contato?" }); onNavigate('add-task-from-lead', item.id); } catch (e) { await updateLead(item.id, { ...item, status: targetColumnId }); toast({ title: "Lead Movido", description: `${item.name} movido para "Perdidos".` }); } } else { await updateLead(item.id, { ...item, status: targetColumnId }); toast({ title: "Lead Atualizado", description: `${item.name} movido para "${targetColumnId}".` }); } }; const handleOpenModal = (lead = null) => { setEditingLead(lead); setModalOpen(true); }; const handleSaveLead = async (leadData) => { if (leadData.id) { await updateLead(leadData.id, leadData); toast({ title: "Lead Atualizado", description: `${leadData.name} foi atualizado.` }); } else { await addLead(leadData); toast({ title: "Lead Adicionado", description: `${leadData.name} foi adicionado.` }); } }; const columns = { 'Novo': { title: 'Novo Lead', color: '#3B82F6', items: leads.filter(l => l.status === 'Novo') }, 'Em contato': { title: 'Em Contato', color: '#0EA5E9', items: leads.filter(l => l.status === 'Em contato') }, 'Proposta enviada': { title: 'Proposta Enviada', color: '#F59E0B', items: leads.filter(l => l.status === 'Proposta enviada') }, 'Ganhos': { title: 'Ganho', color: '#10B981', items: leads.filter(l => l.status === 'Ganhos') }, 'Perdidos': { title: 'Perdido', color: '#EF4444', items: leads.filter(l => l.status === 'Perdidos') }, }; const KanbanBoard = ({ columns, onDragEnd, children }) => { const [draggedItem, setDraggedItem] = useState(null); const [dragOverColumn, setDragOverColumn] = useState(null); const handleDragStart = (e, item, sourceColumnId) => { setDraggedItem({ item, sourceColumnId }); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', item.id); }; const handleDragOver = (e, columnId) => { e.preventDefault(); setDragOverColumn(columnId); }; const handleDrop = (e, targetColumnId) => { e.preventDefault(); if (draggedItem && draggedItem.sourceColumnId !== targetColumnId) { onDragEnd(draggedItem.item, targetColumnId); } setDraggedItem(null); setDragOverColumn(null); }; return (<div className="flex gap-6 overflow-x-auto p-2">{Object.entries(columns).map(([columnId, column]) => (<div key={columnId} className={cn("w-80 flex-shrink-0 flex flex-col rounded-xl transition-colors duration-300", dragOverColumn === columnId ? 'bg-gray-200/50 dark:bg-white/10' : '')} onDragOver={(e) => handleDragOver(e, columnId)} onDrop={(e) => handleDrop(e, columnId)} onDragLeave={() => setDragOverColumn(null)}><div className="p-4 flex justify-between items-center border-b-2" style={{ borderColor: column.color }}><h3 className="font-semibold text-gray-900 dark:text-white">{column.title}</h3><span className="text-sm font-bold text-gray-500 dark:text-gray-400 bg-gray-200 dark:bg-gray-800 rounded-full px-2 py-0.5">{column.items.length}</span></div><div className="p-2 space-y-3 overflow-y-auto min-h-[200px]">{column.items.length > 0 ? (column.items.map(item => (<div key={item.id} draggable onDragStart={(e) => handleDragStart(e, item, columnId)}>{typeof children === 'function' && children(item)}</div>))) : (<div className="text-center text-sm text-gray-500 dark:text-gray-600 p-4">Nenhum item aqui.</div>)}</div></div>))}</div>); }; const LeadCard = memo(({ lead, onEdit }) => { const [analysis, setAnalysis] = useState(null); const [isLoading, setIsLoading] = useState(false); const [isAiActive, setAiActive] = useState(false); const handleAnalyze = async () => { setIsLoading(true); setAiActive(true); const result = await Cortex.analyzeLead(lead); setAnalysis(result); setIsLoading(false); }; const score = analysis?.score || 0; return (<GlassPanel className="p-4 cursor-grab active:cursor-grabbing group" cortex={score > 75}><div className="flex justify-between items-start"><div><p className="font-bold text-gray-900 dark:text-white cursor-pointer hover:text-cyan-500 dark:hover:text-cyan-400" onClick={() => onEdit(lead)}>{lead.name}</p><p className="text-sm text-gray-600 dark:text-gray-400">{lead.company || 'Sem empresa'}</p></div>{isAiActive ? (<div className={cn("text-center transition-opacity", score > 75 && "cortex-active p-1 rounded-lg")}>{isLoading ? (<div className="animate-spin h-5 w-5 border-2 border-violet-500 dark:border-violet-400 border-t-transparent rounded-full mx-auto my-1"></div>) : (<p className="text-xl font-bold text-violet-600 dark:text-violet-400">{score}</p>)}<p className="text-xs text-violet-600 dark:text-violet-500">Score</p></div>) : (<Button variant="violet" size="sm" onClick={handleAnalyze} className="h-auto py-1 px-2 text-xs"><SparklesIcon className="h-3 w-3 mr-1.5" />Analisar</Button>)}</div><div className="mt-3 text-xs text-gray-500"><p>Criado em: {lead.createdAt?.toDate().toLocaleDateString('pt-BR') || 'N/A'}</p></div></GlassPanel>); }); return (<div className="p-4 sm:p-6 lg:p-8"><div className="flex justify-between items-center mb-6"><h2 className="text-3xl font-bold text-gray-900 dark:text-white">Funil de Leads</h2><Button onClick={() => handleOpenModal()} variant="violet"><PlusCircleIcon className="h-5 w-5 mr-2" />Adicionar Lead</Button></div><GlassPanel className="p-4"><KanbanBoard columns={columns} onDragEnd={handleDragEnd}>{(item) => <LeadCard lead={item} onEdit={handleOpenModal} />}</KanbanBoard></GlassPanel><LeadModal isOpen={isModalOpen} onClose={() => setModalOpen(false)} onSave={handleSaveLead} lead={editingLead} /></div>); }
-function TasksPage() { const { tasks, updateTask, addTask, deleteTask, loading } = useData(); const { toast } = useToast(); const confirm = useConfirm(); const [isModalOpen, setModalOpen] = useState(false); const [editingTask, setEditingTask] = useState(null); const handleDragEnd = async (item, targetColumnId) => { await updateTask(item.id, { ...item, status: targetColumnId }); toast({ title: "Tarefa Atualizada", description: `Tarefa movida.` }); }; const handleOpenModal = (task = null) => { setEditingTask(task); setModalOpen(true); }; const handleSaveTask = async (taskData) => { if (taskData.id) { await updateTask(taskData.id, taskData); toast({ title: "Tarefa Atualizada", description: `"${taskData.title}" atualizada.` }); } else { await addTask(taskData); toast({ title: "Tarefa Adicionada", description: `"${taskData.title}" criada.` }); } setModalOpen(false); }; const handleDeleteTask = async (task) => { try { await confirm({ title: `Excluir Tarefa?`, description: `Tem certeza?` }); const success = await deleteTask(task.id, task.title); toast({ title: success ? "Excluída" : "Erro", description: success ? `"${task.title}" removida.` : "Não foi possível excluir.", variant: success ? 'default' : 'destructive' }); } catch (e) {} }; const columns = { 'Pendente': { title: 'Pendente', color: '#6B7280', items: tasks.filter(t => t.status === 'Pendente') }, 'Em andamento': { title: 'Em Andamento', color: '#3B82F6', items: tasks.filter(t => t.status === 'Em andamento') }, 'Concluída': { title: 'Concluída', color: '#10B981', items: tasks.filter(t => t.status === 'Concluída') }, }; const KanbanBoard = ({ columns, onDragEnd, children }) => { const [draggedItem, setDraggedItem] = useState(null); const [dragOverColumn, setDragOverColumn] = useState(null); const handleDragStart = (e, item, sourceColumnId) => { setDraggedItem({ item, sourceColumnId }); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', item.id); }; const handleDragOver = (e, columnId) => { e.preventDefault(); setDragOverColumn(columnId); }; const handleDrop = (e, targetColumnId) => { e.preventDefault(); if (draggedItem && draggedItem.sourceColumnId !== targetColumnId) { onDragEnd(draggedItem.item, targetColumnId); } setDraggedItem(null); setDragOverColumn(null); }; return (<div className="flex gap-6 overflow-x-auto p-2">{Object.entries(columns).map(([columnId, column]) => (<div key={columnId} className={cn("w-80 flex-shrink-0 flex flex-col rounded-xl transition-colors duration-300", dragOverColumn === columnId ? 'bg-gray-200/50 dark:bg-white/10' : '')} onDragOver={(e) => handleDragOver(e, columnId)} onDrop={(e) => handleDrop(e, columnId)} onDragLeave={() => setDragOverColumn(null)}><div className="p-4 flex justify-between items-center border-b-2" style={{ borderColor: column.color }}><h3 className="font-semibold text-gray-900 dark:text-white">{column.title}</h3><span className="text-sm font-bold text-gray-500 dark:text-gray-400 bg-gray-200 dark:bg-gray-800 rounded-full px-2 py-0.5">{column.items.length}</span></div><div className="p-2 space-y-3 overflow-y-auto min-h-[200px]">{column.items.length > 0 ? (column.items.map(item => (<div key={item.id} draggable onDragStart={(e) => handleDragStart(e, item, columnId)}>{typeof children === 'function' && children(item)}</div>))) : (<div className="text-center text-sm text-gray-500 dark:text-gray-600 p-4">Nenhum item aqui.</div>)}</div></div>))}</div>); }; const TaskCard = memo(({ task, onEdit, onDelete }) => { const { clients, leads, users } = useData(); const linkedItem = task.linkedToType === 'client' ? clients.find(c => c.id === task.linkedToId) : leads.find(l => l.id === task.linkedToId); const assignedUser = users.find(u => u.id === task.assignedTo); const priorityColors = { 'Alta': 'border-red-500', 'Média': 'border-yellow-500', 'Baixa': 'border-blue-500' }; const renderDescription = (desc) => { const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/g; return (desc || '').split('\n').map((line, i) => <div key={i} className="text-sm text-gray-700 dark:text-gray-300 mt-2 whitespace-pre-wrap">{line.split(urlRegex).map((part, j) => urlRegex.test(part) ? <a key={j} href={!part.startsWith('http') ? `https://${part}` : part} target="_blank" rel="noopener noreferrer" className="text-cyan-500 hover:underline">{part}</a> : part)}</div>); }; return (<GlassPanel className={cn("p-4 cursor-grab active:cursor-grabbing group border-l-4", priorityColors[task.priority] || 'border-gray-500')}><div className="flex justify-between items-start"><p className="font-bold text-gray-900 dark:text-white flex-grow">{task.title}</p><div className="flex opacity-0 group-hover:opacity-100 transition-opacity"><Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onEdit(task)}><PencilIcon className="h-4 w-4" /></Button><Button variant="ghost" size="icon" className="h-7 w-7 text-red-500/70 hover:text-red-400" onClick={() => onDelete(task)}><Trash2Icon className="h-4 w-4" /></Button></div></div>{linkedItem && ( <p className="text-xs mt-2 text-cyan-700 dark:text-cyan-400 bg-cyan-100 dark:bg-cyan-900/50 px-2 py-1 rounded-md inline-block">{task.linkedToType === 'client' ? 'Cliente: ' : 'Lead: '} {linkedItem.general?.holderName || linkedItem.name}</p>)}{renderDescription(task.description)}<div className="mt-3 text-xs text-gray-500 flex justify-between items-center"><span>Prazo: {task.dueDate ? formatDate(task.dueDate) : 'Sem prazo'}</span>{assignedUser && <div className="w-6 h-6 rounded-full bg-violet-200 dark:bg-violet-900 flex items-center justify-center font-bold text-violet-700 dark:text-violet-300 border-2 border-violet-400 dark:border-violet-700" title={assignedUser.name}>{assignedUser.name?.[0]}</div>}</div></GlassPanel>); }); return (<div className="p-4 sm:p-6 lg:p-8"><div className="flex justify-between items-center mb-6"><h2 className="text-3xl font-bold text-gray-900 dark:text-white">Minhas Tarefas</h2><Button onClick={() => handleOpenModal()}><PlusCircleIcon className="h-5 w-5 mr-2" />Nova Tarefa</Button></div>{loading && !tasks.length ? (<p className="text-center text-gray-500">Carregando...</p>) : tasks.length > 0 ? (<GlassPanel className="p-4"><KanbanBoard columns={columns} onDragEnd={handleDragEnd}>{(item) => <TaskCard task={item} onEdit={handleOpenModal} onDelete={handleDeleteTask} />}</KanbanBoard></GlassPanel>) : (<EmptyState title="Nenhuma Tarefa" message="Crie sua primeira tarefa." actionText="Criar Tarefa" onAction={() => handleOpenModal()} />)}<TaskModal isOpen={isModalOpen} onClose={() => setModalOpen(false)} onSave={handleSaveTask} task={editingTask} /></div>); }
+function LeadsPage({ onNavigate }) {
+    const { leads, updateLead, addLead, leadColumns, addKanbanColumn, deleteKanbanColumn } = useData();
+    const { toast } = useToast();
+    const confirm = useConfirm();
+    const [isLeadModalOpen, setLeadModalOpen] = useState(false);
+    const [isColumnModalOpen, setColumnModalOpen] = useState(false);
+    const [editingLead, setEditingLead] = useState(null);
+
+    // Adicione esta verificação. Se as colunas não carregaram ainda, mostra "Carregando..."
+    if (!leadColumns) {
+        return <div className="p-8 text-center">Carregando colunas...</div>;
+    }
+
+    const handleDragEnd = async (item, targetColumnId) => {
+        const targetColumn = leadColumns.find(c => c.id === targetColumnId);
+        if (!targetColumn) return;
+
+        const newStatus = targetColumn.title;
+        if (newStatus === 'Ganhos') {
+            onNavigate('convert-lead', item.id);
+        } else if (newStatus === 'Perdidos') {
+            try {
+                await confirm({ title: `Marcar ${item.name} como perdido?`, description: "Deseja agendar um novo contato?" });
+                onNavigate('add-task-from-lead', item.id);
+            } catch (e) {
+                await updateLead(item.id, { ...item, status: newStatus });
+                toast({ title: "Lead Movido", description: `${item.name} movido para "Perdidos".` });
+            }
+        } else {
+            await updateLead(item.id, { ...item, status: newStatus });
+            toast({ title: "Lead Atualizado", description: `${item.name} movido para "${newStatus}".` });
+        }
+    };
+
+    const handleOpenLeadModal = (lead = null) => {
+        setEditingLead(lead);
+        setLeadModalOpen(true);
+    };
+
+    const handleSaveLead = async (leadData) => {
+        if (leadData.id) {
+            await updateLead(leadData.id, leadData);
+            toast({ title: "Lead Atualizado", description: `${leadData.name} foi atualizado.` });
+        } else {
+            const firstColumn = leadColumns[0];
+            const status = firstColumn ? firstColumn.title : 'Novo';
+            await addLead({ ...leadData, status });
+            toast({ title: "Lead Adicionado", description: `${leadData.name} foi adicionado.` });
+        }
+    };
+
+    const handleAddColumn = async (columnData) => {
+        const newColumn = {
+            ...columnData,
+            boardId: 'leads',
+            order: leadColumns.length
+        };
+        const success = await addKanbanColumn(newColumn);
+        if (success) {
+            toast({ title: "Coluna Adicionada!" });
+            setColumnModalOpen(false);
+        } else {
+            toast({ title: "Erro", variant: 'destructive' });
+        }
+    };
+
+    const handleDeleteColumn = async (columnId) => {
+        const itemsInColumn = leads.filter(l => l.status === leadColumns.find(c => c.id === columnId)?.title);
+        if (itemsInColumn.length > 0) {
+            toast({ title: "Coluna não está vazia!", description: "Mova os leads para outra coluna antes de excluir.", variant: 'destructive' });
+            return;
+        }
+        try {
+            await confirm({ title: "Excluir Coluna?", description: "Esta ação não pode ser desfeita." });
+            await deleteKanbanColumn(columnId);
+            toast({ title: "Coluna Excluída" });
+        } catch (e) {}
+    };
+
+    const columnsForBoard = useMemo(() => {
+        if (!leadColumns) return {}; // Proteção extra
+        return leadColumns.reduce((acc, column) => {
+            acc[column.id] = {
+                ...column,
+                items: leads.filter(l => l.status === column.title)
+            };
+            return acc;
+        }, {});
+    }, [leadColumns, leads]);
+
+    const KanbanBoard = ({ columns, onDragEnd, children, onDeleteColumn }) => {
+        const [draggedItem, setDraggedItem] = useState(null);
+        const [dragOverColumn, setDragOverColumn] = useState(null);
+        const handleDragStart = (e, item, sourceColumnId) => { setDraggedItem({ item, sourceColumnId }); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', item.id); };
+        const handleDragOver = (e, columnId) => { e.preventDefault(); setDragOverColumn(columnId); };
+        const handleDrop = (e, targetColumnId) => { e.preventDefault(); if (draggedItem && draggedItem.sourceColumnId !== targetColumnId) { onDragEnd(draggedItem.item, targetColumnId); } setDraggedItem(null); setDragOverColumn(null); };
+
+        return (<div className="flex gap-6 overflow-x-auto p-2">
+            {Object.entries(columns).map(([columnId, column]) => (
+                <div key={columnId} className={cn("w-80 flex-shrink-0 flex flex-col rounded-xl transition-colors duration-300", dragOverColumn === columnId ? 'bg-gray-200/50 dark:bg-white/10' : '')} onDragOver={(e) => handleDragOver(e, columnId)} onDrop={(e) => handleDrop(e, columnId)} onDragLeave={() => setDragOverColumn(null)}>
+                    <div className="p-4 flex justify-between items-center border-b-2" style={{ borderColor: column.color }}>
+                        <h3 className="font-semibold text-gray-900 dark:text-white">{column.title}</h3>
+                        <div className="flex items-center gap-2">
+                            <span className="text-sm font-bold text-gray-500 dark:text-gray-400 bg-gray-200 dark:bg-gray-800 rounded-full px-2 py-0.5">{column.items.length}</span>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onDeleteColumn(column.id)}><Trash2Icon className="h-4 w-4"/></Button>
+                        </div>
+                    </div>
+                    <div className="p-2 space-y-3 overflow-y-auto min-h-[200px]">{column.items.length > 0 ? (column.items.map(item => (<div key={item.id} draggable onDragStart={(e) => handleDragStart(e, item, columnId)}>{typeof children === 'function' && children(item)}</div>))) : (<div className="text-center text-sm text-gray-500 dark:text-gray-600 p-4">Nenhum item aqui.</div>)}</div>
+                </div>
+            ))}
+        </div>);
+    };
+
+    const LeadCard = memo(({ lead, onEdit }) => {
+        const [analysis, setAnalysis] = useState(null);
+        const [isLoading, setIsLoading] = useState(false);
+        const [isAiActive, setAiActive] = useState(false);
+        const handleAnalyze = async () => { setIsLoading(true); setAiActive(true); const result = await Cortex.analyzeLead(lead); setAnalysis(result); setIsLoading(false); };
+        const score = analysis?.score || 0;
+        return (<GlassPanel className="p-4 cursor-grab active:cursor-grabbing group" cortex={score > 75}>
+            <div className="flex justify-between items-start">
+                <div><p className="font-bold text-gray-900 dark:text-white cursor-pointer hover:text-cyan-500 dark:hover:text-cyan-400" onClick={() => onEdit(lead)}>{lead.name}</p><p className="text-sm text-gray-600 dark:text-gray-400">{lead.company || 'Sem empresa'}</p></div>
+                {isAiActive ? (<div className={cn("text-center transition-opacity", score > 75 && "cortex-active p-1 rounded-lg")}>{isLoading ? (<div className="animate-spin h-5 w-5 border-2 border-violet-500 dark:border-violet-400 border-t-transparent rounded-full mx-auto my-1"></div>) : (<p className="text-xl font-bold text-violet-600 dark:text-violet-400">{score}</p>)}<p className="text-xs text-violet-600 dark:text-violet-500">Score</p></div>) : (<Button variant="violet" size="sm" onClick={handleAnalyze} className="h-auto py-1 px-2 text-xs"><SparklesIcon className="h-3 w-3 mr-1.5" />Analisar</Button>)}
+            </div>
+            <div className="mt-3 text-xs text-gray-500"><p>Criado em: {lead.createdAt?.toDate().toLocaleDateString('pt-BR') || 'N/A'}</p></div>
+        </GlassPanel>);
+    });
+
+    return (
+        <div className="p-4 sm:p-6 lg:p-8">
+            <div className="flex justify-between items-center mb-6">
+                <h2 className="text-3xl font-bold text-gray-900 dark:text-white">Funil de Leads</h2>
+                <div className="flex gap-2">
+                     <Button onClick={() => setColumnModalOpen(true)}><PaletteIcon className="h-4 w-4 mr-2"/>Gerenciar Colunas</Button>
+                     <Button onClick={() => handleOpenLeadModal()} variant="violet"><PlusCircleIcon className="h-5 w-5 mr-2" />Adicionar Lead</Button>
+                </div>
+            </div>
+            <GlassPanel className="p-4">
+                <KanbanBoard columns={columnsForBoard} onDragEnd={handleDragEnd} onDeleteColumn={handleDeleteColumn}>
+                    {(item) => <LeadCard lead={item} onEdit={handleOpenLeadModal} />}
+                </KanbanBoard>
+            </GlassPanel>
+            <LeadModal isOpen={isLeadModalOpen} onClose={() => setLeadModalOpen(false)} onSave={handleSaveLead} lead={editingLead} />
+            <ColumnModal isOpen={isColumnModalOpen} onClose={() => setColumnModalOpen(false)} onSave={handleAddColumn} />
+        </div>
+    );
+}
+function TasksPage() {
+    const { tasks, updateTask, addTask, deleteTask, loading, taskColumns, addKanbanColumn, deleteKanbanColumn } = useData();
+    const { toast } = useToast();
+    const confirm = useConfirm();
+    const [isTaskModalOpen, setTaskModalOpen] = useState(false);
+    const [isColumnModalOpen, setColumnModalOpen] = useState(false);
+    const [editingTask, setEditingTask] = useState(null);
+
+    // Adicione esta verificação. Se as colunas não carregaram ainda, mostra "Carregando..."
+    if (!taskColumns) {
+        return <div className="p-8 text-center">Carregando colunas...</div>;
+    }
+
+    const handleDragEnd = async (item, targetColumnId) => {
+        const targetColumn = taskColumns.find(c => c.id === targetColumnId);
+        if (!targetColumn) return;
+        const newStatus = targetColumn.title;
+        await updateTask(item.id, { ...item, status: newStatus });
+        toast({ title: "Tarefa Atualizada", description: `Tarefa movida para "${newStatus}".` });
+    };
+
+    const handleOpenTaskModal = (task = null) => {
+        setEditingTask(task);
+        setTaskModalOpen(true);
+    };
+
+    const handleSaveTask = async (taskData) => {
+        if (taskData.id) {
+            await updateTask(taskData.id, taskData);
+            toast({ title: "Tarefa Atualizada", description: `"${taskData.title}" atualizada.` });
+        } else {
+            const firstColumn = taskColumns[0];
+            const status = firstColumn ? firstColumn.title : 'Pendente';
+            await addTask({ ...taskData, status });
+            toast({ title: "Tarefa Adicionada", description: `"${taskData.title}" criada.` });
+        }
+        setTaskModalOpen(false);
+    };
+
+    const handleDeleteTask = async (task) => {
+        try {
+            await confirm({ title: `Excluir Tarefa?`, description: `Tem certeza?` });
+            const success = await deleteTask(task.id, task.title);
+            toast({ title: success ? "Excluída" : "Erro", description: success ? `"${task.title}" removida.` : "Não foi possível excluir.", variant: success ? 'default' : 'destructive' });
+        } catch (e) {}
+    };
+
+    const handleAddColumn = async (columnData) => {
+        const newColumn = {
+            ...columnData,
+            boardId: 'tasks',
+            order: taskColumns.length
+        };
+        const success = await addKanbanColumn(newColumn);
+        if (success) {
+            toast({ title: "Coluna Adicionada!" });
+            setColumnModalOpen(false);
+        } else {
+            toast({ title: "Erro", variant: 'destructive' });
+        }
+    };
+
+    const handleDeleteColumn = async (columnId) => {
+        const itemsInColumn = tasks.filter(t => t.status === taskColumns.find(c => c.id === columnId)?.title);
+        if (itemsInColumn.length > 0) {
+            toast({ title: "Coluna não está vazia!", description: "Mova as tarefas para outra coluna antes de excluir.", variant: 'destructive' });
+            return;
+        }
+        try {
+            await confirm({ title: "Excluir Coluna?", description: "Esta ação não pode ser desfeita." });
+            await deleteKanbanColumn(columnId);
+            toast({ title: "Coluna Excluída" });
+        } catch (e) {}
+    };
+
+    const columnsForBoard = useMemo(() => {
+        if (!taskColumns) return {}; // Proteção extra
+        return taskColumns.reduce((acc, column) => {
+            acc[column.id] = {
+                ...column,
+                items: tasks.filter(t => t.status === column.title)
+            };
+            return acc;
+        }, {});
+    }, [taskColumns, tasks]);
+
+    const KanbanBoard = ({ columns, onDragEnd, children, onDeleteColumn }) => {
+        const [draggedItem, setDraggedItem] = useState(null);
+        const [dragOverColumn, setDragOverColumn] = useState(null);
+        const handleDragStart = (e, item, sourceColumnId) => { setDraggedItem({ item, sourceColumnId }); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', item.id); };
+        const handleDragOver = (e, columnId) => { e.preventDefault(); setDragOverColumn(columnId); };
+        const handleDrop = (e, targetColumnId) => { e.preventDefault(); if (draggedItem && draggedItem.sourceColumnId !== targetColumnId) { onDragEnd(draggedItem.item, targetColumnId); } setDraggedItem(null); setDragOverColumn(null); };
+
+        return (<div className="flex gap-6 overflow-x-auto p-2">{Object.entries(columns).map(([columnId, column]) => (
+            <div key={columnId} className={cn("w-80 flex-shrink-0 flex flex-col rounded-xl transition-colors duration-300", dragOverColumn === columnId ? 'bg-gray-200/50 dark:bg-white/10' : '')} onDragOver={(e) => handleDragOver(e, columnId)} onDrop={(e) => handleDrop(e, columnId)} onDragLeave={() => setDragOverColumn(null)}>
+                <div className="p-4 flex justify-between items-center border-b-2" style={{ borderColor: column.color }}>
+                    <h3 className="font-semibold text-gray-900 dark:text-white">{column.title}</h3>
+                    <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-gray-500 dark:text-gray-400 bg-gray-200 dark:bg-gray-800 rounded-full px-2 py-0.5">{column.items.length}</span>
+                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onDeleteColumn(column.id)}><Trash2Icon className="h-4 w-4"/></Button>
+                    </div>
+                </div>
+                <div className="p-2 space-y-3 overflow-y-auto min-h-[200px]">{column.items.length > 0 ? (column.items.map(item => (<div key={item.id} draggable onDragStart={(e) => handleDragStart(e, item, columnId)}>{typeof children === 'function' && children(item)}</div>))) : (<div className="text-center text-sm text-gray-500 dark:text-gray-600 p-4">Nenhum item aqui.</div>)}</div>
+            </div>
+        ))}</div>);
+    };
+
+    const TaskCard = memo(({ task, onEdit, onDelete }) => {
+        const { clients, leads, users } = useData();
+        const linkedItem = task.linkedToType === 'client' ? clients.find(c => c.id === task.linkedToId) : leads.find(l => l.id === task.linkedToId);
+        const assignedUser = users.find(u => u.id === task.assignedTo);
+        const priorityColors = { 'Alta': 'border-red-500', 'Média': 'border-yellow-500', 'Baixa': 'border-blue-500' };
+        const renderDescription = (desc) => { const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/g; return (desc || '').split('\n').map((line, i) => <div key={i} className="text-sm text-gray-700 dark:text-gray-300 mt-2 whitespace-pre-wrap">{line.split(urlRegex).map((part, j) => urlRegex.test(part) ? <a key={j} href={!part.startsWith('http') ? `https://${part}` : part} target="_blank" rel="noopener noreferrer" className="text-cyan-500 hover:underline">{part}</a> : part)}</div>); };
+        return (<GlassPanel className={cn("p-4 cursor-grab active:cursor-grabbing group border-l-4", priorityColors[task.priority] || 'border-gray-500')}>
+            <div className="flex justify-between items-start">
+                <p className="font-bold text-gray-900 dark:text-white flex-grow">{task.title}</p>
+                <div className="flex opacity-0 group-hover:opacity-100 transition-opacity">
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onEdit(task)}><PencilIcon className="h-4 w-4" /></Button>
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500/70 hover:text-red-400" onClick={() => onDelete(task)}><Trash2Icon className="h-4 w-4" /></Button>
+                </div>
+            </div>
+            {linkedItem && (<p className="text-xs mt-2 text-cyan-700 dark:text-cyan-400 bg-cyan-100 dark:bg-cyan-900/50 px-2 py-1 rounded-md inline-block">{task.linkedToType === 'client' ? 'Cliente: ' : 'Lead: '} {linkedItem.general?.holderName || linkedItem.name}</p>)}
+            {renderDescription(task.description)}
+            <div className="mt-3 text-xs text-gray-500 flex justify-between items-center">
+                <span>Prazo: {task.dueDate ? formatDate(task.dueDate) : 'Sem prazo'}</span>
+                {assignedUser && <div className="w-6 h-6 rounded-full bg-violet-200 dark:bg-violet-900 flex items-center justify-center font-bold text-violet-700 dark:text-violet-300 border-2 border-violet-400 dark:border-violet-700" title={assignedUser.name}>{assignedUser.name?.[0]}</div>}
+            </div>
+        </GlassPanel>);
+    });
+
+    return (
+        <div className="p-4 sm:p-6 lg:p-8">
+            <div className="flex justify-between items-center mb-6">
+                <h2 className="text-3xl font-bold text-gray-900 dark:text-white">Minhas Tarefas</h2>
+                 <div className="flex gap-2">
+                     <Button onClick={() => setColumnModalOpen(true)}><PaletteIcon className="h-4 w-4 mr-2"/>Gerenciar Colunas</Button>
+                     <Button onClick={() => handleOpenTaskModal()} variant="violet"><PlusCircleIcon className="h-5 w-5 mr-2" />Nova Tarefa</Button>
+                </div>
+            </div>
+            {loading && !tasks.length ? (<p className="text-center text-gray-500">Carregando...</p>) : (
+                <GlassPanel className="p-4">
+                    <KanbanBoard columns={columnsForBoard} onDragEnd={handleDragEnd} onDeleteColumn={handleDeleteColumn}>
+                        {(item) => <TaskCard task={item} onEdit={handleOpenTaskModal} onDelete={handleDeleteTask} />}
+                    </KanbanBoard>
+                </GlassPanel>
+            )}
+            <TaskModal isOpen={isTaskModalOpen} onClose={() => setTaskModalOpen(false)} onSave={handleSaveTask} task={editingTask} />
+            <ColumnModal isOpen={isColumnModalOpen} onClose={() => setColumnModalOpen(false)} onSave={handleAddColumn} />
+        </div>
+    );
+}
 function TimelinePage() { const { timeline, users, loading } = useData(); const [filters, setFilters] = useState({ userId: 'all', module: 'all', actionType: 'all', searchTerm: '' }); const handleFilterChange = (e) => setFilters(prev => ({ ...prev, [e.target.name]: e.target.value })); const filteredTimeline = useMemo(() => { return timeline.filter(log => { if (!log) return false; const userMatch = filters.userId === 'all' || log.userId === filters.userId; const moduleMatch = filters.module === 'all' || log.module === filters.module; const actionMatch = filters.actionType === 'all' || log.actionType === filters.actionType; const searchMatch = !filters.searchTerm || (log.description || '').toLowerCase().includes(filters.searchTerm.toLowerCase()) || (log.userName || '').toLowerCase().includes(filters.searchTerm.toLowerCase()) || (log.entity?.name || '').toLowerCase().includes(filters.searchTerm.toLowerCase()); return userMatch && moduleMatch && actionMatch && searchMatch; }); }, [timeline, filters]); const TimelineItem = ({ log }) => { const getIcon = (actionType) => { switch (actionType) { case 'CRIAÇÃO': return <PlusCircleIcon className="h-5 w-5 text-green-500" />; case 'EDIÇÃO': return <PencilIcon className="h-5 w-5 text-yellow-500" />; case 'EXCLUSÃO': return <Trash2Icon className="h-5 w-5 text-red-500" />; case 'CONVERSÃO': return <RefreshCwIcon className="h-5 w-5 text-blue-500" />; default: return <InfoIcon className="h-5 w-5 text-gray-500" />; } }; return ( <div className="flex items-start gap-4 p-4 border-b border-gray-200 dark:border-white/10 last:border-b-0"> <div className="flex-shrink-0 pt-1">{getIcon(log.actionType)}</div> <div className="flex-grow"> <p className="text-sm"> <span className="font-semibold text-gray-900 dark:text-white">{log.userName || 'Sistema'}</span> <span className="text-gray-600 dark:text-gray-400"> {log.description || ''}</span> </p> <div className="text-xs text-gray-500 dark:text-gray-500 mt-1"> {formatDateTime(log.timestamp)} </div> <div className="flex flex-wrap gap-2 mt-2"> {log.module && <Badge variant="outline">{log.module}</Badge>} {log.actionType && <Badge>{log.actionType}</Badge>} {log.entity?.name && <Badge variant="secondary">{log.entity.type}: {log.entity.name}</Badge>} </div> </div> <Avatar className="h-10 w-10 border-2 border-gray-300 dark:border-gray-600"> <AvatarImage src={log.userAvatar} /> <AvatarFallback>{log.userName?.[0] || 'S'}</AvatarFallback> </Avatar> </div> ); }; return ( <div className="p-4 sm:p-6 lg:p-8"> <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-6">Time-Line de Atividades</h2> <GlassPanel className="p-4 mb-6"> <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4"> <Input placeholder="Buscar..." name="searchTerm" value={filters.searchTerm} onChange={handleFilterChange} /> <Select name="userId" value={filters.userId} onChange={handleFilterChange}> <option value="all">Todos Usuários</option> {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)} </Select> <Select name="module" value={filters.module} onChange={handleFilterChange}> <option value="all">Todos Módulos</option> <option>Clientes</option><option>Leads</option><option>Tarefas</option><option>Corporativo</option> </Select> <Select name="actionType" value={filters.actionType} onChange={handleFilterChange}> <option value="all">Todas Ações</option> <option>CRIAÇÃO</option><option>EDIÇÃO</option><option>EXCLUSÃO</option><option>CONVERSÃO</option> </Select> </div> </GlassPanel> <GlassPanel> <div className="max-h-[70vh] overflow-y-auto"> {loading && timeline.length === 0 ? ( <p className="text-center text-gray-500 p-8">Carregando...</p> ) : filteredTimeline.length > 0 ? ( filteredTimeline.map(log => <TimelineItem key={log.id} log={log} />) ) : ( <EmptyState title="Nenhuma Atividade Encontrada" message="Ajuste os filtros." /> )} </div> </GlassPanel> </div> ); };
 
 const MetricCard = ({ title, value, icon }) => ( <GlassPanel className="p-6 flex flex-col justify-between"> <div className="flex justify-between items-start"> <h3 className="text-base font-semibold text-gray-800 dark:text-white">{title}</h3> <div className="text-gray-400 dark:text-gray-500">{icon}</div> </div> <p className="text-4xl font-bold text-gray-900 dark:text-white mt-4">{value}</p> </GlassPanel> );
@@ -1093,28 +1896,38 @@ function MainApp() {
         handleNavigate('tasks');
     };
     
-    const renderContent = () => {
-        const leadForTask = leads.find(l => l.id === selectedItemId);
-        switch (page) {
-            case 'dashboard': return <DashboardPage onNavigate={handleNavigate} />;
-            case 'leads': return <LeadsPage onNavigate={handleNavigate} />;
-            case 'clients': return <ClientsList onClientSelect={(id) => handleNavigate('client-details', id)} onAddClient={() => handleNavigate('add-client')} />;
-            case 'client-details': return <ClientDetails client={itemDetails} onBack={() => handleNavigate('clients')} onEdit={(client, options) => handleNavigate('edit-client', client.id, options)} />;
-            case 'add-client': return <ClientForm onSave={handleSaveClient} onCancel={() => handleNavigate('clients')} />;
-            case 'edit-client': return <ClientForm client={itemDetails} onSave={handleSaveClient} onCancel={() => handleNavigate('client-details', itemDetails.id)} initialTab={pageOptions.initialTab} />;
-            case 'convert-lead': return <ClientForm isConversion={true} leadData={itemDetails} onSave={handleSaveClient} onCancel={() => handleNavigate('leads')} />;
-            case 'add-task-from-lead': return <TaskModal isOpen={true} onClose={() => handleNavigate('leads')} onSave={handleSaveTaskFromLead} task={{ title: `Follow-up: ${leadForTask?.name}`, linkedToId: leadForTask?.id, linkedToType: 'lead' }} />;
-            case 'tasks': return <TasksPage />;
-            case 'calendar': return <CalendarPage onNavigate={handleNavigate} />;
-            case 'timeline': return <TimelinePage />;
-            case 'corporate': return <CorporatePage />;
-            case 'profile': return <ProfilePage />;
-            default: return <DashboardPage onNavigate={handleNavigate} />;
-        }
-    };
+   const renderContent = () => {
+    const leadForTask = leads.find(l => l.id === selectedItemId);
+    switch (page) {
+        case 'dashboard': return <DashboardPage onNavigate={handleNavigate} />;
+        case 'leads': return <LeadsPage onNavigate={handleNavigate} />;
+        case 'clients': return <ClientsList onClientSelect={(id) => handleNavigate('client-details', id)} onAddClient={() => handleNavigate('add-client')} />;
+        case 'client-details': return <ClientDetails client={itemDetails} onBack={() => handleNavigate('clients')} onEdit={(client, options) => handleNavigate('edit-client', client.id, options)} />;
+        case 'add-client': return <ClientForm onSave={handleSaveClient} onCancel={() => handleNavigate('clients')} />;
+        case 'edit-client': return <ClientForm client={itemDetails} onSave={handleSaveClient} onCancel={() => handleNavigate('client-details', itemDetails.id)} initialTab={pageOptions.initialTab} />;
+        case 'convert-lead': return <ClientForm isConversion={true} leadData={itemDetails} onSave={handleSaveClient} onCancel={() => handleNavigate('leads')} />;
+        case 'add-task-from-lead': return <TaskModal isOpen={true} onClose={() => handleNavigate('leads')} onSave={handleSaveTaskFromLead} task={{ title: `Follow-up: ${leadForTask?.name}`, linkedToId: leadForTask?.id, linkedToType: 'lead' }} />;
+        case 'commissions': return <CommissionsPage />; // ADICIONE ESTA LINHA
+        case 'tasks': return <TasksPage />;
+        case 'calendar': return <CalendarPage onNavigate={handleNavigate} />;
+        case 'timeline': return <TimelinePage />;
+        case 'corporate': return <CorporatePage />;
+        case 'profile': return <ProfilePage />;
+        default: return <DashboardPage onNavigate={handleNavigate} />;
+    }
+};
     
     const CommandPalette = ({ isOpen, setIsOpen, onNavigate }) => { const { clients, leads } = useData(); const [searchTerm, setSearchTerm] = useState(''); const [activeIndex, setActiveIndex] = useState(0); const inputRef = useRef(null); const actions = useMemo(() => [ { id: 'nav-dashboard', name: 'Ir para Painel de Controle', type: 'Ação', action: () => onNavigate('dashboard') }, { id: 'nav-leads', name: 'Ir para Leads', type: 'Ação', action: () => onNavigate('leads') }, { id: 'nav-clients', name: 'Ir para Clientes', type: 'Ação', action: () => onNavigate('clients') }, { id: 'nav-tasks', name: 'Ir para Tarefas', type: 'Ação', action: () => onNavigate('tasks') }, { id: 'nav-calendar', name: 'Ir para Calendário', type: 'Ação', action: () => onNavigate('calendar') }, { id: 'nav-timeline', name: 'Ir para Time-Line', type: 'Ação', action: () => onNavigate('timeline') }, { id: 'nav-corporate', name: 'Ir para Corporativo', type: 'Ação', action: () => onNavigate('corporate') }, { id: 'nav-profile', name: 'Ir para Meu Perfil', type: 'Ação', action: () => onNavigate('profile') }, ...clients.map(c => ({ id: c.id, name: c.general.holderName || c.general.companyName, type: 'Cliente', action: () => onNavigate('client-details', c.id) })), ...leads.map(l => ({ id: l.id, name: l.name, type: 'Lead', action: () => onNavigate('leads') })) ], [clients, leads, onNavigate]); const results = useMemo(() => searchTerm ? actions.filter(a => a.name.toLowerCase().includes(searchTerm.toLowerCase())) : actions.slice(0, 8), [searchTerm, actions]); useEffect(() => { if (isOpen) { inputRef.current?.focus(); setActiveIndex(0); } }, [isOpen]); useEffect(() => { const handleKeyDown = (e) => { if (!isOpen) return; if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIndex(prev => (prev + 1) % (results.length || 1)); } else if (e.key === 'ArrowUp') { e.preventDefault(); setActiveIndex(prev => (prev - 1 + (results.length || 1)) % (results.length || 1)); } else if (e.key === 'Enter') { e.preventDefault(); if (results[activeIndex]) { results[activeIndex].action(); setIsOpen(false); setSearchTerm(''); } } else if (e.key === 'Escape') { setIsOpen(false); } }; window.addEventListener('keydown', handleKeyDown); return () => window.removeEventListener('keydown', handleKeyDown); }, [isOpen, results, activeIndex, setIsOpen]); if (!isOpen) return null; return createPortal(<div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 dark:bg-black/80 animate-fade-in pt-24" onClick={() => setIsOpen(false)}><GlassPanel className="w-full max-w-2xl flex flex-col" onClick={e => e.stopPropagation()}><div className="flex items-center gap-4 p-4 border-b border-gray-200 dark:border-white/10"><SearchIcon className="h-5 w-5 text-gray-500 dark:text-gray-400"/><input ref={inputRef} type="text" placeholder="Buscar clientes, leads ou navegar..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full bg-transparent text-gray-900 dark:text-white placeholder:text-gray-500 focus:outline-none"/></div><div className="p-2 max-h-[400px] overflow-y-auto">{results.length > 0 ? (results.map((item, index) => (<div key={item.id} onClick={() => { item.action(); setIsOpen(false); setSearchTerm(''); }} className={cn("flex justify-between items-center p-3 rounded-lg cursor-pointer", index === activeIndex ? "bg-violet-500/20 dark:bg-violet-500/30" : "hover:bg-gray-100 dark:hover:bg-white/10")}><span className="text-gray-900 dark:text-white">{item.name}</span><span className="text-xs text-gray-600 dark:text-gray-400 bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded-md">{item.type}</span></div>))) : (<p className="p-4 text-center text-gray-500">Nenhum resultado.</p>)}</div></GlassPanel></div>, document.body); }
-    const Sidebar = ({ onNavigate, currentPage, isSidebarOpen }) => { const { logout } = useAuth(); const navItems = [{ id: 'dashboard', label: 'Painel de Controle', icon: HomeIcon }, { id: 'leads', label: 'Leads', icon: TargetIcon }, { id: 'clients', label: 'Clientes', icon: UsersIcon }, { id: 'tasks', label: 'Minhas Tarefas', icon: CheckSquareIcon }, { id: 'calendar', label: 'Calendário', icon: CalendarIcon }, { id: 'timeline', label: 'Time-Line', icon: HistoryIcon }, { id: 'corporate', label: 'Corporativo', icon: BuildingIcon }]; return (<aside className={cn("fixed top-0 left-0 z-40 w-64 h-full transition-transform lg:translate-x-0", isSidebarOpen ? "translate-x-0" : "-translate-x-full")}><div className="h-full flex flex-col bg-white/80 dark:bg-[#0D1117]/80 backdrop-blur-2xl border-r border-gray-200 dark:border-white/10"><div className="flex items-center justify-center h-20 flex-shrink-0"><h2 className="text-2xl font-bold text-gray-900 dark:text-white tracking-wider">OLYMPUS X</h2></div><nav className="flex-grow mt-6 px-4 space-y-2">{navItems.map(item => (<button key={item.id} onClick={() => onNavigate(item.id)} className={cn("w-full flex items-center p-3 rounded-lg transition-all duration-300 font-semibold", currentPage.startsWith(item.id) ? "bg-violet-100 dark:bg-violet-500/20 text-violet-600 dark:text-violet-300" : "text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-white")}><item.icon className="h-5 w-5 mr-3" /><span>{item.label}</span></button>))}</nav><div className="p-4 border-t border-gray-200 dark:border-white/10 mt-auto flex-shrink-0"><button onClick={() => onNavigate('profile')} className="w-full flex items-center p-3 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-white mb-2"><UserCircleIcon className="h-5 w-5 mr-3" /><span>Meu Perfil</span></button><button onClick={logout} className="w-full flex items-center p-3 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-red-500/10 hover:text-red-500 dark:hover:text-red-400"><LogOutIcon className="h-5 w-5 mr-3" /><span>Sair</span></button></div></div></aside>); }
+    const Sidebar = ({ onNavigate, currentPage, isSidebarOpen }) => { const { logout } = useAuth(); const navItems = [
+    { id: 'dashboard', label: 'Painel de Controle', icon: HomeIcon },
+    { id: 'leads', label: 'Leads', icon: TargetIcon },
+    { id: 'clients', label: 'Clientes', icon: UsersIcon },
+    { id: 'commissions', label: 'Comissões', icon: PercentIcon }, // NOVA LINHA
+    { id: 'tasks', label: 'Minhas Tarefas', icon: CheckSquareIcon },
+    { id: 'calendar', label: 'Calendário', icon: CalendarIcon },
+    { id: 'timeline', label: 'Time-Line', icon: HistoryIcon },
+    { id: 'corporate', label: 'Corporativo', icon: BuildingIcon }
+    ];; return (<aside className={cn("fixed top-0 left-0 z-40 w-64 h-full transition-transform lg:translate-x-0", isSidebarOpen ? "translate-x-0" : "-translate-x-full")}><div className="h-full flex flex-col bg-white/80 dark:bg-[#0D1117]/80 backdrop-blur-2xl border-r border-gray-200 dark:border-white/10"><div className="flex items-center justify-center h-20 flex-shrink-0"><h2 className="text-2xl font-bold text-gray-900 dark:text-white tracking-wider">OLYMPUS X</h2></div><nav className="flex-grow mt-6 px-4 space-y-2">{navItems.map(item => (<button key={item.id} onClick={() => onNavigate(item.id)} className={cn("w-full flex items-center p-3 rounded-lg transition-all duration-300 font-semibold", currentPage.startsWith(item.id) ? "bg-violet-100 dark:bg-violet-500/20 text-violet-600 dark:text-violet-300" : "text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-white")}><item.icon className="h-5 w-5 mr-3" /><span>{item.label}</span></button>))}</nav><div className="p-4 border-t border-gray-200 dark:border-white/10 mt-auto flex-shrink-0"><button onClick={() => onNavigate('profile')} className="w-full flex items-center p-3 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-white mb-2"><UserCircleIcon className="h-5 w-5 mr-3" /><span>Meu Perfil</span></button><button onClick={logout} className="w-full flex items-center p-3 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-red-500/10 hover:text-red-500 dark:hover:text-red-400"><LogOutIcon className="h-5 w-5 mr-3" /><span>Sair</span></button></div></div></aside>); }
     const Header = ({ onToggleSidebar, onOpenCommandPalette }) => { const { user } = useAuth(); const { theme, toggleTheme } = useTheme(); const { clients } = useData(); const expiringContracts = useMemo(() => { const today = new Date(); const thirtyDaysFromNow = new Date(); thirtyDaysFromNow.setDate(today.getDate() + 30); return clients.filter(client => (client.contracts || []).some(contract => { if (!contract.dataFimContrato) return false; const endDate = new Date(contract.dataFimContrato); return endDate >= today && endDate <= thirtyDaysFromNow; })).length; }, [clients]); return (<header className="sticky top-0 z-30 h-20"><div className="absolute inset-0 bg-gradient-to-b from-gray-50 dark:from-[#0D1117] to-transparent pointer-events-none"></div><div className="relative flex items-center justify-between h-full px-6"><button onClick={onToggleSidebar} className="lg:hidden p-2 -ml-2 text-gray-600 dark:text-gray-300"><svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" /></svg></button><div className="hidden lg:block"><Button variant="ghost" onClick={onOpenCommandPalette} className="text-gray-500 dark:text-gray-400"><SearchIcon className="h-5 w-5 mr-2" />Busca Global...<span className="ml-4 text-xs border border-gray-400 dark:border-gray-600 rounded-md px-1.5 py-0.5">Ctrl K</span></Button></div><div className="flex items-center gap-4"><Button variant="ghost" size="icon" onClick={toggleTheme} title="Alterar Tema">{theme === 'dark' ? <SunIcon className="h-6 w-6 text-yellow-400" /> : <MoonIcon className="h-6 w-6 text-gray-600" />}</Button><div className="relative"><Button variant="ghost" size="icon"><BellIcon className="h-6 w-6" /></Button>{expiringContracts > 0 && <span className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-violet-500 text-white text-[10px] ring-2 ring-white dark:ring-[#0D1117]">{expiringContracts}</span>}</div><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-full bg-cyan-100 dark:bg-cyan-900 flex items-center justify-center font-bold text-cyan-700 dark:text-cyan-300 border-2 border-cyan-300 dark:border-cyan-700">{user?.name?.[0]}</div><div className="text-right hidden sm:block"><p className="font-semibold text-sm text-gray-900 dark:text-white">{user?.name}</p><p className="text-xs text-gray-500 dark:text-gray-400">{user?.permissionLevel}</p></div></div></div></div></header>); }
     
     return (

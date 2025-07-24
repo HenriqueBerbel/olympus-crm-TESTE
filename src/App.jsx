@@ -194,7 +194,14 @@ const Input = memo(forwardRef(({ className, error, isCurrency = false, ...props 
 const Label = memo(forwardRef(({ className, ...props }, ref) => <label ref={ref} className={cn("text-sm font-bold text-gray-600 dark:text-gray-400", className)} {...props} />));
 const Textarea = memo(forwardRef(({ className, ...props }, ref) => <textarea ref={ref} className={cn("flex min-h-[80px] w-full rounded-lg border border-gray-300 dark:border-white/10 bg-gray-100/50 dark:bg-black/20 px-3 py-2 text-sm text-gray-900 dark:text-gray-200 placeholder:text-gray-500 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all", className)} {...props} />));
 const Select = memo(forwardRef(({ className, children, error, ...props }, ref) => <div className="relative"><select ref={ref} className={cn("flex h-10 w-full items-center justify-between rounded-lg border border-gray-300 dark:border-white/10 bg-gray-100/50 dark:bg-black/20 px-3 py-2 text-sm text-gray-900 dark:text-gray-200 placeholder:text-gray-500 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all appearance-none pr-8", error && "border-red-500 ring-red-500", className)} {...props}>{children}</select><div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none"><ChevronDownIcon className="h-4 w-4 text-gray-500 dark:text-gray-400" /></div></div>));
-const DateField = memo(forwardRef(({ className, ...props }, ref) => <div className="relative"><Input ref={ref} type="date" className={cn("pr-10", className)} {...props} /><div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none"><CalendarIcon className="h-5 w-5 text-gray-400" /></div></div>));
+const DateField = memo(forwardRef(({ className, ...props }, ref) => (
+    <div className="relative">
+        <Input ref={ref} type="date" className={cn("pr-10 dark:[color-scheme:dark]", className)} {...props} />
+        <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+            <CalendarIcon className="h-5 w-5 text-gray-400 dark:text-gray-500" />
+        </div>
+    </div>
+)));
 const Checkbox = memo(forwardRef(({ className, ...props }, ref) => <input type="checkbox" ref={ref} className={cn("h-4 w-4 shrink-0 rounded-sm border-2 border-cyan-500/50 text-cyan-500 bg-gray-200 dark:bg-gray-800 focus:ring-cyan-500 focus:ring-offset-gray-50 dark:focus:ring-offset-gray-900", className)} {...props} />));
 const TabsContext = createContext();
 
@@ -1362,52 +1369,57 @@ function CalendarPage({ onNavigate }) {
     const selectedDayEvents = eventsByDay[selectedDate.toISOString().split('T')[0]] || [];
 
     const EventDetailContent = () => {
-        if (!selectedEvent) return null;
+    if (!selectedEvent) return null;
 
-        const credentials = selectedEvent.data?.contract?.credentialsList || [];
-        const selectedCred = credentials.find(c => c.id === selectedCredentialId);
+    const credentials = selectedEvent.data?.contract?.credentialsList || [];
+    const selectedCred = credentials.find(c => c.id === selectedCredentialId);
 
-        return (
-             <div>
-                <div className="space-y-4">
-                    <div className="flex items-center gap-3"><div className={cn("w-10 h-10 rounded-lg flex-shrink-0 flex items-center justify-center text-white", selectedEvent.color)}><selectedEvent.icon className="w-6 h-6" /></div><h3 className="text-xl font-bold">{selectedEvent.title}</h3></div>
-                    <DetailItem label="Responsável" value={ (selectedEvent.type === 'boletoSend' && users.find(u => u.id === selectedEvent.data.contract.boletoResponsibleId)?.name) || (selectedEvent.type === 'task' && users.find(u => u.id === selectedEvent.data.task.assignedTo)?.name) || 'N/A' } />
-
-                    {selectedEvent.type === 'boletoSend' && (
-                        <div className="mt-4 pt-4 border-t border-gray-200/50 dark:border-white/10">
-                            <h5 className="text-md font-bold text-gray-700 dark:text-gray-200 mb-2">Credenciais do Contrato</h5>
-                            {credentials.length === 0 && <p className="text-sm text-gray-500">Nenhuma credencial cadastrada.</p>}
-                            {credentials.length > 1 && (
-                                <Select value={selectedCredentialId} onChange={(e) => setSelectedCredentialId(e.target.value)} className="mb-4">
-                                    <option value="">Selecione a credencial...</option>
-                                    {credentials.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
-                                </Select>
-                            )}
-                            {selectedCred && (
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1">
-                                    <DetailItem label="Email Criado" value={selectedCred.createdEmail} /><DetailItem label="Senha do Email" value={selectedCred.createdEmailPassword} isPassword />
-                                    <DetailItem label="Site do Portal" value={selectedCred.portalSite} isLink /><DetailItem label="Senha do Portal" value={selectedCred.portalPassword} isPassword />
-                                    <DetailItem label="Login do Portal" value={selectedCred.portalLogin} /><DetailItem label="Usuário do Portal" value={selectedCred.portalUser} />
-                                    <DetailItem label="Login do App" value={selectedCred.appLogin} /><DetailItem label="Senha do App" value={selectedCred.appPassword} isPassword />
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    {selectedEvent.type === 'boletoSend' && 
-                        <div className="pt-4 border-t border-gray-200 dark:border-white/10"><Label>Mudar Data (Apenas este mês)</Label><DateField value={newDateForEvent} onChange={(e) => setNewDateForEvent(e.target.value)} /></div>
-                    }
+    return (
+         <div>
+            <div className="space-y-4">
+                <div className="flex items-center gap-3">
+                    <div className={cn("w-10 h-10 rounded-lg flex-shrink-0 flex items-center justify-center text-white", selectedEvent.color)}><selectedEvent.icon className="w-6 h-6" /></div>
+                    <h3 className="text-xl font-bold text-gray-900 dark:text-white">{selectedEvent.title}</h3>
                 </div>
-                <div className="flex justify-between items-center pt-6 mt-4 border-t border-gray-200 dark:border-white/10">
-                    <label className="flex items-center gap-2 text-sm font-medium"><Checkbox checked={completedEventIds.has(selectedEvent.id)} onChange={(e) => toggleEventCompletion(selectedEvent, e.target.checked)} /> Marcar como Concluído</label>
-                    <div className="flex gap-2">
-                        {selectedEvent.type === 'boletoSend' && <Button onClick={handleDateChange} disabled={!newDateForEvent}>Salvar Nova Data</Button>}
-                        <Button variant="violet" onClick={handleActionClick}>{selectedEvent.type === 'task' ? 'Ir para Tarefa' : 'Ver Cliente'}</Button>
+                <DetailItem label="Responsável" value={ (selectedEvent.type === 'boletoSend' && users.find(u => u.id === selectedEvent.data.contract.boletoResponsibleId)?.name) || (selectedEvent.type === 'task' && users.find(u => u.id === selectedEvent.data.task.assignedTo)?.name) || 'N/A' } />
+
+                {selectedEvent.type === 'boletoSend' && (
+                    <div className="mt-4 pt-4 border-t border-gray-200/50 dark:border-white/10">
+                        <h5 className="text-md font-bold text-gray-700 dark:text-gray-200 mb-2">Credenciais do Contrato</h5>
+                        {credentials.length === 0 && <p className="text-sm text-gray-500">Nenhuma credencial cadastrada.</p>}
+                        {credentials.length > 1 && (
+                            <Select value={selectedCredentialId} onChange={(e) => setSelectedCredentialId(e.target.value)} className="mb-4">
+                                <option value="">Selecione a credencial...</option>
+                                {credentials.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
+                            </Select>
+                        )}
+                        {selectedCred && (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1">
+                                <DetailItem label="Email Criado" value={selectedCred.createdEmail} /><DetailItem label="Senha do Email" value={selectedCred.createdEmailPassword} isPassword />
+                                <DetailItem label="Site do Portal" value={selectedCred.portalSite} isLink /><DetailItem label="Senha do Portal" value={selectedCred.portalPassword} isPassword />
+                                <DetailItem label="Login do Portal" value={selectedCred.portalLogin} /><DetailItem label="Usuário do Portal" value={selectedCred.portalUser} />
+                                <DetailItem label="Login do App" value={selectedCred.appLogin} /><DetailItem label="Senha do App" value={selectedCred.appPassword} isPassword />
+                            </div>
+                        )}
                     </div>
+                )}
+
+                {selectedEvent.type === 'boletoSend' && 
+                    <div className="pt-4 border-t border-gray-200 dark:border-white/10"><Label>Mudar Data (Apenas este mês)</Label><DateField value={newDateForEvent} onChange={(e) => setNewDateForEvent(e.target.value)} /></div>
+                }
+            </div>
+            <div className="flex justify-between items-center pt-6 mt-4 border-t border-gray-200 dark:border-white/10">
+                <label className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+                    <Checkbox checked={completedEventIds.has(selectedEvent.id)} onChange={(e) => toggleEventCompletion(selectedEvent, e.target.checked)} /> Marcar como Concluído
+                </label>
+                <div className="flex gap-2">
+                    {selectedEvent.type === 'boletoSend' && <Button onClick={handleDateChange} disabled={!newDateForEvent}>Salvar Nova Data</Button>}
+                    <Button variant="violet" onClick={handleActionClick}>{selectedEvent.type === 'task' ? 'Ir para Tarefa' : 'Ver Cliente'}</Button>
                 </div>
             </div>
-        )
-    }
+        </div>
+    )
+}
 
     return (
         <div className="p-4 sm:p-6 lg:p-8 h-[calc(100vh-5rem)] flex flex-col">

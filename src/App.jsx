@@ -104,7 +104,246 @@ const generateChangeDescription = (oldData, newData, nameMap) => {
 
 // --- CORTEX AI (GEMINI) ---
 const GEMINI_API_KEY = "AIzaSyBblrqaeYhLpze4QqNlACEFJpC4ek-7z3Y";
-const Cortex = { run: async (prompt) => { if (!GEMINI_API_KEY) return "Erro: Chave de API não configurada."; const api_url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`; try { const response = await fetch(api_url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }) }); if (!response.ok) { const errorBody = await response.text(); return `Erro na API: ${response.status}`; } const data = await response.json(); return data.candidates[0].content.parts[0].text; } catch (error) { return "Erro de conexão com a IA."; } }, analyzeLead: async (lead) => { const prompt = `Analise as seguintes notas sobre um lead de vendas e retorne um score de 1 a 100 e uma breve justificativa. O formato da resposta deve ser um JSON com as chaves "score" (number) e "justification" (string). Notas do Lead: "${lead.notes || 'Nenhuma nota fornecida.'}"`; const resultText = await Cortex.run(prompt); if (typeof resultText !== 'string' || resultText.startsWith('Erro')) { const justification = resultText.includes('429') ? "Análise indisponível (limite de quota atingido)." : "Não foi possível analisar as notas (erro de API)."; return { score: 0, justification }; } try { return JSON.parse(resultText.replace(/```json|```/g, '').trim()); } catch (e) { return { score: 50, justification: "Não foi possível analisar as notas." }; } }, summarizeHistory: async (client) => { const observationsText = (client.observations || []).map(obs => `Em ${formatDateTime(obs.timestamp)} por ${obs.authorName}: ${obs.text}`).join('\n'); const prompt = `Resuma o seguinte histórico de observações de um cliente em 3 a 4 bullet points concisos. Foque nos pontos mais importantes para um rápido entendimento do relacionamento. Histórico: "${observationsText || 'Nenhum histórico de observações.'}"`; return await Cortex.run(prompt); } };
+const PARSE_COMMAND_PROMPT_TEMPLATE = `
+Você é a IA Córtex, um co-piloto de CRM proativo. Sua função é converter linguagem natural em um plano de ação JSON. Você deve ser extremamente bom em extrair entidades (datas, nomes, valores) do texto.
+
+Ações possíveis: 'show_briefing', 'create_task', 'update_lead_status', 'add_note', 'search', 'clarify_task_details'.
+Data de hoje para referência: {today}.
+
+Contexto de Entidades:
+- Usuários: {users}
+- Clientes: {clients}
+- Leads: {leads}
+
+REGRAS CRÍTICAS DE EXTRAÇÃO:
+1.  **Extração de Tarefas:** Ao receber um comando para criar uma tarefa, extraia SEMPRE: 'title', 'dueDate' (converta 'amanhã', 'sexta-feira', 'daqui a 4 dias' etc. para o formato AAAA-MM-DD), 'description', e 'assignedToName' (encontre o NOME do usuário no contexto {users}). Se o nome do responsável for ambíguo, use a ação 'clarify_task_details'.
+2.  **Ambiguidade:** Se um nome de usuário como "Daniela" for mencionado e houver mais de uma "Daniela" no contexto de usuários, sua ação DEVE ser 'clarify_task_details'. O payload deve conter todos os outros detalhes que você extraiu (título, prazo) e um array 'options' com os usuários ambíguos (ex: [{id: '123', name: 'Daniela Silva'}, {id: '456', name: 'Daniela Souza'}]).
+3.  **Briefing:** Se o comando for "meu briefing", "prepare meu dia" ou similar, a ação é 'show_briefing'. O payload NÃO PRECISA DE DADOS.
+4.  **Plano de Ação:** SEMPRE retorne um objeto JSON.
+
+CRÍTICO: Sua resposta DEVE ser APENAS o objeto JSON, sem nenhuma palavra, explicação, desculpas ou formatação markdown como \`\`\`json antes ou depois.
+
+Exemplos:
+- "criar uma tarefa para o dia 28/07/2025 para ligar para o lead TechCorp, responsável sou eu mesmo"
+  -> {"plan": [{"action": "create_task", "payload": {"title": "Ligar para o lead TechCorp", "dueDate": "2025-07-28", "assignedToName": "Henrique M. F. Berbel"}}]}
+- "criar uma tarefa, prazo de 4 dias, gerenciar colaboradores, responsável pela tarefa Daniela"
+  -> {"plan": [{"action": "create_task", "payload": {"title": "Gerenciar colaboradores", "dueDate": "{today_plus_4_days}", "assignedToName": "Daniela"}}]}
+- "meu briefing diário"
+  -> {"plan": [{"action": "show_briefing", "payload": {}}]}
+
+Analise o seguinte comando e retorne APENAS o objeto JSON:
+Comando: "{command}"
+`;
+
+// 🧠 CÉREBRO 2: BASE DE CONHECIMENTO DO SISTEMA
+const SYSTEM_KNOWLEDGE_BASE = `
+## Persona e Missão
+        Você é Córtex, o co-piloto de IA do sistema Olympus X CRM, uma plataforma para corretores de seguros de saúde.
+        Sua missão é ser o assistente mais inteligente e proativo do mercado, eliminando a necessidade de navegação manual, respondendo dúvidas e executando ações complexas através de comandos simples.
+        Seu tom é amigável, especialista, convidativo e um pouco futurista. Você sempre busca reduzir o trabalho do usuário.
+
+        ## Visão Geral do Ecossistema Olympus X
+        O Olympus X não é um simples CRM, é uma plataforma de inteligência de negócios e automação para o ciclo de vida completo do cliente de seguros: Prospecção, Venda, Onboarding, Gestão e Retenção. O core do sistema é usar dados para automatizar tarefas e gerar insights proativos.
+
+        ## Dicionário de Termos-Chave
+        - **Lead:** Um potencial cliente, ainda não comprou. Fica no Funil de Leads.
+        - **Cliente:** Um lead que comprou. Possui contratos e beneficiários. Fica na Carteira de Clientes.
+        - **Contrato:** O produto que o cliente comprou (plano de saúde/odonto). Um cliente pode ter múltiplos contratos, mas apenas um "ativo".
+        - **Beneficiário:** As pessoas cobertas pelo contrato (titular, dependentes).
+        - **Operadora:** A empresa que fornece o plano (ex: Unimed, SulAmérica, GNDI).
+        - **Córtex Command:** É a interface de comando (Ctrl+K) que você, a IA, utiliza para interagir com o usuário.
+
+        ## Detalhamento Extremo dos Módulos e Funções
+
+        ### Córtex Command (Sua Interface)
+        - **Ativação:** Ctrl+K ou clicando no botão "Assistente Córtex".
+        - **Tela Inicial:** Apresenta uma saudação personalizada e sugestões proativas (contratos a vencer, leads esquecidos).
+        - **Modos de Operação:**
+          1. **Buscar:** Encontra qualquer entidade (cliente, lead, contrato) por qualquer dado (nome, CPF, telefone, apólice).
+          2. **Perguntar:** Responde a dúvidas sobre como usar o sistema (sua função principal com esta base de conhecimento).
+          3. **Executar:** (Funcionalidade futura a ser implementada) Executa ações através de linguagem natural (ex: "criar tarefa para ligar para cliente X").
+
+        ### Dashboard (Painel de Controle)
+        - **Aba "Painel de Controle":** Visão geral da saúde do negócio.
+          - **KPIs:** Faturamento Ativo, Novos Clientes (Mês), Leads Ativos, Taxa de Conversão.
+          - **Funil de Vendas:** Gráfico visual das etapas dos leads.
+          - **Avisos Importantes:** Alertas automáticos sobre contratos a vencer ou dados incompletos de beneficiários.
+          - **Insights da IA:** Onde você, Córtex, oferece sugestões estratégicas (ex: oportunidades de upsell).
+        - **Outras Abas:** "Saúde Financeira" (MRR, Churn), "Performance da Equipe" (rankings), "Análise de Carteira" (distribuição por operadora).
+
+        ### Leads (Funil de Vendas - Kanban)
+        - **Interface:** Quadro Kanban visual e interativo. Colunas são 100% customizáveis (nome, cor).
+        - **Fluxo de Conversão CRÍTICO:** Ao arrastar um lead para a coluna cujo nome é "Ganhos", o sistema AUTOMATICAMENTE inicia o fluxo de conversão, abrindo o formulário de novo cliente com os dados do lead já preenchidos. Este é um fluxo de alta produtividade.
+        - **Card do Lead:** Exibe dados rápidos e o botão "Analisar com IA" que gera um score de potencial de venda.
+
+        ### Clientes
+        - **Lista de Clientes:** Tabela principal com busca e filtros avançados por status, operadora e mês de vigência.
+        - **Detalhes do Cliente (Visão 360º):** Tela acessada ao clicar em um cliente.
+          - **Aba "Visão Geral":** Dados cadastrais da empresa e contatos.
+          - **Aba "Contratos":** Exibe o contrato ATIVO em destaque e um histórico de contratos antigos (inativos).
+          - **Aba "Beneficiários":** Lista TODOS os beneficiários. Cada card é clicável e abre um modal de VISUALIZAÇÃO com todos os detalhes (CPF, idade, IMC, carteirinha, credenciais de app). A edição é feita no formulário principal do cliente.
+          - **Aba "Histórico":** Log de todas as observações e, futuramente, comentários e menções (@).
+          - **Aba "Córtex AI":** Onde o usuário pode solicitar um resumo inteligente do histórico do cliente.
+
+        ### Minhas Tarefas (Kanban)
+        - **Propósito:** Gerenciamento de atividades do dia a dia do corretor.
+        - **Automação Chave:** O sistema cria tarefas AUTOMATICAMENTE aqui. A principal é "Enviar Boleto - [Nome Cliente] - [Mês/Ano]", gerada com base na "Data de Envio do Boleto" cadastrada no contrato do cliente. A descrição da tarefa já vem com os dados do portal e o link do WhatsApp do cliente.
+
+        ### Calendário Inteligente
+        - **Inteligência:** 99% dos eventos são gerados AUTOMATICAMENTE pelo sistema, não por inserção manual.
+        - **Eventos Gerados:**
+          - **Envio de Boleto:** Com base na data no contrato. Permite adiar o envio no mês corrente.
+          - **Vencimento de Boleto:** Com base no dia de vencimento no contrato.
+          - **Renovação de Contrato:** Com base na data de renovação.
+          - **Tarefas de Alta Prioridade:** Tarefas com prazo e prioridade alta aparecem aqui.
+
+        ### Gestão Corporativa (Área do Admin)
+        - **Equipe Interna:** Gerencia usuários COM acesso ao sistema. Os cards mostram métricas de performance (clientes, leads, tarefas) para cada usuário.
+        - **Parceiros Externos:** Cadastra contatos comerciais (outras corretoras, freelancers) SEM acesso ao sistema, mas que precisam ser associados a vendas. Eles aparecem nos dropdowns de "Corretor Responsável".
+        - **Operadoras:** Um guia de referência. O usuário pode cadastrar apenas o nome (para uso rápido) ou detalhar com dados do gerente de contas, portal, etc. A lista é expansível.
+        - **Minha Empresa:** Configuração da própria corretora (logo, dados, metas de faturamento que se conectam ao Dashboard).
+
+        ## Fluxos de Trabalho e Processos-Chave
+        
+        ### Fluxo de Venda Completo:
+        1. Lead chega (manualmente ou via site).
+        2. Corretor usa o Córtex para analisar o potencial do lead (score).
+        3. Lead é movido no funil Kanban.
+        4. Ao chegar em "Ganhos", o sistema o converte para a tela de "Novo Cliente".
+        5. Corretor preenche dados do Contrato e Beneficiários.
+        6. Ao salvar, o Cliente é criado, o Lead é excluído.
+        7. Uma nova Comissão pode ser lançada usando o "Wizard de Lançamento".
+        8. O sistema passa a monitorar o novo contrato para gerar tarefas e eventos no calendário (pós-venda).
+
+        ### Fluxo de Pós-Venda Automatizado:
+        1. Mensalmente, o BoletoTaskManager verifica os contratos.
+        2. Tarefas de "Enviar Boleto" são criadas para os responsáveis.
+        3. O Calendário exibe os dias de envio e vencimento.
+        4. Ao se aproximar da data de renovação, o Calendário alerta e o Dashboard mostra um "Aviso Importante".
+        5. (Visão Futura) Jornadas Automatizadas irão disparar e-mails e tarefas de contato em momentos-chave do ciclo de vida do cliente.
+
+        ### Fluxo de Suporte e Retenção (Visão Futura):
+        1. O "Córtex Sentinel" monitora a "Saúde da Conta" de todos os clientes.
+        2. Se um cliente tem muitos problemas (ex: reembolsos negados) ou está sem contato, sua nota de saúde cai.
+        3. Ao atingir um nível crítico, o sistema cria uma tarefa proativa para o corretor agir ANTES do cliente pensar em cancelar.
+
+        ## Diretrizes de Resposta
+        - Seja sempre conciso e use listas (bullet points) quando possível.
+        - Ao explicar um "como fazer", use um formato passo a passo (1, 2, 3...).
+        - Sempre que possível, termine sua resposta oferecendo uma ação: "Quer que eu te leve para a tela de Clientes?", "Posso criar esta tarefa para você?".
+        - Mantenha a persona de um co-piloto inteligente e prestativo.
+        `;
+
+
+// 🔌 CONECTOR CENTRAL DA API: LIDA COM TODAS AS CHAMADAS E ERROS
+const apiClient = async (prompt) => {
+    // 🚨 ATENÇÃO: Mova sua chave para um arquivo .env na raiz do projeto:
+    // REACT_APP_GEMINI_API_KEY="SUA_CHAVE_AQUI"
+    // E substitua a linha abaixo por: const GEMINI_API_KEY = process.env.REACT_APP_GEMINI_API_KEY;
+    const GEMINI_API_KEY = "AIzaSyBblrqaeYhLpze4QqNlACEFJpC4ek-7z3Y"; 
+    
+    if (!GEMINI_API_KEY) {
+        console.error("Chave de API do Gemini não encontrada.");
+        return { success: false, data: "Erro: Chave de API não configurada." };
+    }
+    const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`;
+    
+    try {
+        const response = await fetch(API_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+        });
+
+        if (!response.ok) {
+            const errorBody = await response.json();
+            console.error("Erro na API Gemini:", errorBody);
+            return { 
+                success: false, 
+                status: response.status, 
+                data: `Erro na API: ${errorBody.error?.message || response.statusText}` 
+            };
+        }
+
+        const data = await response.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+        if (!text) {
+             return { success: false, data: "A IA não retornou um texto válido." };
+        }
+        
+        return { success: true, data: text };
+
+    } catch (error) {
+        console.error("Erro de conexão com a IA:", error);
+        return { success: false, data: "Erro de conexão com a IA." };
+    }
+};
+
+// ✨ OBJETO CORTEX COMPLETO E FINALIZADO
+const Cortex = {
+    /**
+     * Interpreta um comando em linguagem natural e o transforma em um plano de ação JSON.
+     */
+    parseCommand: async (prompt) => {
+        const response = await apiClient(prompt);
+        if (!response.success) {
+            return { error: response.data };
+        }
+        try {
+            const jsonString = response.data.substring(response.data.indexOf('{'), response.data.lastIndexOf('}') + 1);
+            return JSON.parse(jsonString);
+        } catch (e) {
+            console.error("Erro ao parsear JSON da IA:", e, "Resposta recebida:", response.data);
+            return { error: "A IA retornou uma resposta em um formato inválido." };
+        }
+    },
+
+    /**
+     * Analisa as notas de um lead e retorna um score de potencial.
+     */
+    analyzeLead: async (lead) => {
+        const prompt = `Analise as seguintes notas sobre um lead de vendas e retorne um score de 1 a 100 e uma breve justificativa. O formato da resposta deve ser um JSON com as chaves "score" (number) e "justification" (string). Notas do Lead: "${lead.notes || 'Nenhuma nota fornecida.'}"`;
+        
+        const response = await apiClient(prompt);
+        
+        if (!response.success) {
+            const justification = response.status === 429 
+                ? "Análise indisponível (limite de quota atingido)." 
+                : "Não foi possível analisar as notas (erro de API).";
+            return { score: 0, justification };
+        }
+
+        try {
+            const jsonString = response.data.substring(response.data.indexOf('{'), response.data.lastIndexOf('}') + 1);
+            return JSON.parse(jsonString);
+        } catch (e) {
+            return { score: 50, justification: "Não foi possível interpretar a análise da IA." };
+        }
+    },
+
+    /**
+     * Cria um resumo conciso do histórico de observações de um cliente.
+     */
+    summarizeHistory: async (client) => {
+        const observationsText = (client.observations || [])
+            .map(obs => `Em ${formatDateTime(obs.timestamp)} por ${obs.authorName}: ${obs.text}`)
+            .join('\n');
+        const prompt = `Resuma o seguinte histórico de observações de um cliente em 3 a 4 bullet points concisos. Foque nos pontos mais importantes para um rápido entendimento do relacionamento. Histórico: "${observationsText || 'Nenhum histórico de observações.'}"`;
+        
+        const response = await apiClient(prompt);
+        return response.data; // Retorna o resumo ou a mensagem de erro do apiClient
+    },
+
+    /**
+     * Responde a perguntas gerais sobre o funcionamento do sistema.
+     */
+    getHelp: async (question) => {
+        const prompt = `${SYSTEM_KNOWLEDGE_BASE}\n\nO usuário perguntou: "${question}".\n\nResponda a pergunta dele com base no seu conhecimento profundo do sistema.`;
+        const response = await apiClient(prompt);
+        return response.data;
+    }
+};
 
 // --- CONTEXTOS (STATE MANAGEMENT) ---
 const ThemeContext = createContext();
@@ -118,8 +357,7 @@ const useAuth = () => useContext(AuthContext);
 const DataContext = createContext();
 const DataProvider = ({ children }) => {
     const { user } = useAuth();
-    // Garante que todos os arrays comecem como listas vazias
-    const [data, setData] = useState({ clients: [], leads: [], tasks: [], users: [], timeline: [], operators: [], commissions: [], companyProfile: {}, leadColumns: [], taskColumns: [], completedEvents: [], loading: true });
+    const [data, setData] = useState({ clients: [], leads: [], tasks: [], users: [], timeline: [], operators: [], commissions: [], companyProfile: {}, leadColumns: [], taskColumns: [], completedEvents: [], partners: [], loading: true });
 
     const logAction = async (logData) => {
         if (!db || !user) return;
@@ -130,7 +368,8 @@ const DataProvider = ({ children }) => {
 
     useEffect(() => {
         if (!db) { setData(d => ({ ...d, loading: false })); return; }
-        const collectionsToFetch = { clients: 'clients', leads: 'leads', tasks: 'tasks', users: 'users', operators: 'operators', timeline: 'timeline', commissions: 'commissions', completedEvents: 'completed_events' };
+        const collectionsToFetch = { clients: 'clients', leads: 'leads', tasks: 'tasks', users: 'users', operators: 'operators', timeline: 'timeline', commissions: 'commissions', completedEvents: 'completed_events', partners: 'partners' };
+        
         const unsubscribes = Object.entries(collectionsToFetch).map(([stateKey, collectionName]) => {
             const q = collectionName === 'timeline' ? query(collection(db, collectionName), orderBy('timestamp', 'desc')) : collection(db, collectionName);
             return onSnapshot(q, (snapshot) => {
@@ -138,7 +377,7 @@ const DataProvider = ({ children }) => {
                 setData(prev => ({ ...prev, [stateKey]: items }));
             }, (error) => {
                 console.error(`Erro ao buscar ${collectionName}, definindo como array vazio:`, error);
-                setData(prev => ({...prev, [stateKey]: []})); // Se der erro, garante que seja um array vazio
+                setData(prev => ({...prev, [stateKey]: []}));
             });
         });
 
@@ -149,10 +388,68 @@ const DataProvider = ({ children }) => {
 
         const unsubProfile = onSnapshot(doc(db, 'company_profile', 'main'), (doc) => setData(prev => ({ ...prev, companyProfile: doc.exists() ? doc.data() : {} })));
         unsubscribes.push(unsubProfile);
-        const timer = setTimeout(() => setData(d => ({ ...d, loading: false })), 2000); // Aumentei um pouco o tempo para garantir
+        
+        const timer = setTimeout(() => setData(d => ({ ...d, loading: false })), 2000);
+        
         return () => { unsubscribes.forEach(unsub => unsub?.()); clearTimeout(timer); };
     }, []);
 
+    const actionableEvents = useMemo(() => {
+        const { clients, tasks, commissions } = data;
+        if (!clients || !tasks || !commissions) return [];
+
+        const generatedEvents = [];
+        const addEvent = (event) => { if (event.date && !isNaN(event.date.getTime())) { generatedEvents.push(event); } };
+
+        clients.forEach(client => {
+            (client.contracts || []).forEach(contract => {
+                if (contract.status !== 'ativo') return;
+                
+                const end = contract.renewalDate ? new Date(contract.renewalDate + 'T23:59:59') : new Date(new Date().getFullYear() + 5, 0, 1);
+
+                // Lógica de Envio de Boleto
+                if (contract.boletoSentDate) {
+                    let current = new Date(contract.boletoSentDate + 'T00:00:00');
+                    while (current <= end) {
+                        const originalDateStr = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`;
+                        const exception = (client.boletoExceptions || []).find(ex => ex.originalDate === originalDateStr);
+                        const eventDate = exception 
+                            ? new Date(exception.modifiedDate + 'T00:00:00') 
+                            : new Date(current.getFullYear(), current.getMonth(), new Date(contract.boletoSentDate + 'T00:00:00').getDate());
+                        
+                        const eventId = `boleto-${client.id}-${contract.id}-${originalDateStr}`;
+                        addEvent({ type: 'boletoSend', id: eventId, date: eventDate, data: { client, contract, originalDate: originalDateStr }, title: `Enviar Boleto: ${client.general.holderName || client.general.companyName}`, color: 'bg-cyan-500', icon: FileTextIcon });
+                        current.setMonth(current.getMonth() + 1);
+                    }
+                }
+                
+                // Lógica de Vencimento de Boleto
+                if (contract.monthlyDueDate && contract.effectiveDate) {
+                    let current = new Date(contract.effectiveDate + 'T00:00:00');
+                    while(current <= end) {
+                        const dueDate = new Date(current.getFullYear(), current.getMonth(), parseInt(contract.monthlyDueDate, 10));
+                        addEvent({ type: 'boletoDue', id: `due-${client.id}-${contract.id}-${dueDate.toISOString()}`, date: dueDate, data: { client, contract }, title: `Vencimento: ${client.general.holderName || client.general.companyName}`, color: 'bg-yellow-500', icon: AlertTriangleIcon });
+                        current.setMonth(current.getMonth() + 1);
+                    }
+                }
+
+                // Lógica de Renovação de Contrato
+                if (contract.renewalDate) {
+                    addEvent({ type: 'renewal', id: `renewal-${client.id}-${contract.id}`, date: new Date(contract.renewalDate + 'T00:00:00'), data: { client, contract }, title: `Renovação: ${client.general.holderName || client.general.companyName}`, color: 'bg-violet-500', icon: AwardIcon });
+                }
+            });
+        });
+
+        // Lógica de Tarefas de Alta Prioridade
+        tasks.forEach(task => {
+            if (task.priority === 'Alta' && task.dueDate) {
+                addEvent({ type: 'task', id: `task-${task.id}`, date: new Date(task.dueDate + 'T00:00:00'), data: { task }, title: `Tarefa: ${task.title}`, color: 'bg-red-500', icon: CheckSquareIcon });
+            }
+        });
+
+        return generatedEvents;
+    }, [data.clients, data.tasks, data.commissions]);
+    
     const addClient = async (clientData) => { if(!db) return null; try { const docRef = await addDoc(collection(db, "clients"), { ...clientData, createdAt: serverTimestamp() }); logAction({ actionType: 'CRIAÇÃO', module: 'Clientes', description: `criou o cliente ${clientData.general.holderName}.`, entity: { type: 'Cliente', id: docRef.id, name: clientData.general.holderName }, linkTo: `/clients/${docRef.id}` }); return { id: docRef.id, ...clientData }; } catch (e) { return null; } };
     const updateClient = async (clientId, updatedData) => { if (!db) return null; try { const oldClient = data.clients.find(c => c.id === clientId); const changes = generateChangeDescription(oldClient, updatedData, fieldNameMap); const description = changes.length > 0 ? `atualizou o cliente ${updatedData.general?.holderName || 'sem nome'}: ${changes.join(', ')}.` : `visualizou/salvou o cliente ${updatedData.general?.holderName || 'sem nome'} sem alterações.`; const clientRef = doc(db, "clients", clientId); await updateDoc(clientRef, updatedData); logAction({ actionType: 'EDIÇÃO', module: 'Clientes', description: description, entity: { type: 'Cliente', id: clientId, name: updatedData.general?.holderName }, linkTo: `/clients/${clientId}`}); return { id: clientId, ...updatedData }; } catch (e) { return null; } };
     const deleteClient = async (clientId, clientName) => { if(!db) return false; try { await deleteDoc(doc(db, "clients", clientId)); logAction({ actionType: 'EXCLUSÃO', module: 'Clientes', description: `excluiu o cliente ${clientName}.`, entity: { type: 'Cliente', id: clientId, name: clientName } }); return true; } catch (e) { return false; } };
@@ -165,7 +462,8 @@ const DataProvider = ({ children }) => {
     const deleteTask = async (taskId, taskTitle) => { if(!db) return false; try { await deleteDoc(doc(db, "tasks", taskId)); logAction({ actionType: 'EXCLUSÃO', module: 'Tarefas', description: `excluiu a tarefa "${taskTitle}".`}); return true; } catch (e) { return false; } };
     const addOperator = async (operatorData) => { if(!db) return false; try { await addDoc(collection(db, "operators"), operatorData); logAction({ actionType: 'CRIAÇÃO', module: 'Corporativo', description: `adicionou a operadora ${operatorData.name}.` }); return true; } catch (e) { return false; } };
     const deleteOperator = async (operatorId, operatorName) => { if(!db) return false; try { await deleteDoc(doc(db, "operators", operatorId)); logAction({ actionType: 'EXCLUSÃO', module: 'Corporativo', description: `removeu a operadora ${operatorName}.` }); return true; } catch (e) { return false; } };
-    const updateCompanyProfile = async (data) => { if(!db) return false; try { await setDoc(doc(db, 'company_profile', 'main'), data); logAction({ actionType: 'EDIÇÃO', module: 'Corporativo', description: 'atualizou os dados da empresa.' }); return true; } catch (e) { return false; }};
+    const updateOperator = async (operatorId, dataToUpdate) => { if(!db) return false; try { await updateDoc(doc(db, "operators", operatorId), dataToUpdate); logAction({ actionType: 'EDIÇÃO', module: 'Corporativo', description: `atualizou a operadora ${dataToUpdate.name}.` }); return true; } catch (e) { return false; } };
+    const updateCompanyProfile = async (data) => { if(!db) return false; try { await setDoc(doc(db, 'company_profile', 'main'), data, { merge: true }); logAction({ actionType: 'EDIÇÃO', module: 'Corporativo', description: 'atualizou os dados da empresa.' }); return true; } catch (e) { return false; }};
     const addCommission = async (commissionData) => { if(!db) return null; try { const docRef = await addDoc(collection(db, "commissions"), { ...commissionData, createdAt: serverTimestamp() }); logAction({ actionType: 'CRIAÇÃO', module: 'Comissões', description: `lançou comissão para ${commissionData.clientName}.` }); return { id: docRef.id, ...commissionData }; } catch (e) { return null; } };
     const updateCommission = async (commissionId, dataToUpdate) => { if(!db) return false; try { await updateDoc(doc(db, "commissions", commissionId), dataToUpdate); logAction({ actionType: 'EDIÇÃO', module: 'Comissões', description: `atualizou comissão.` }); return true; } catch (e) { return false; } };
     const deleteCommission = async (commissionId) => { if(!db) return false; try { await deleteDoc(doc(db, "commissions", commissionId)); logAction({ actionType: 'EXCLUSÃO', module: 'Comissões', description: `excluiu comissão.` }); return true; } catch (e) { return false; } };
@@ -173,8 +471,11 @@ const DataProvider = ({ children }) => {
     const deleteKanbanColumn = async (columnId) => { if (!db) return false; try { await deleteDoc(doc(db, 'kanban_columns', columnId)); return true; } catch (e) { return false; } };
     const updateKanbanColumnOrder = async (orderedColumns) => { if (!db) return false; try { const batch = writeBatch(db); orderedColumns.forEach((col, index) => { const docRef = doc(db, 'kanban_columns', col.id); batch.update(docRef, { order: index }); }); await batch.commit(); return true; } catch (e) { return false; } };
     const toggleEventCompletion = async (event, isCompleted) => { if (!db || !user) return false; const eventDocRef = doc(db, 'completed_events', event.id); try { if (isCompleted) { await setDoc(eventDocRef, { eventId: event.id, completedAt: serverTimestamp(), userId: user.uid, title: event.title }); logAction({ actionType: 'CONCLUSÃO', module: 'Calendário', description: `concluiu o evento: "${event.title}"`}); } else { await deleteDoc(eventDocRef); logAction({ actionType: 'REABERTURA', module: 'Calendário', description: `reabriu o evento: "${event.title}"`}); } return true; } catch (e) { return false; } };
+    const addPartner = async (partnerData) => { if(!db) return false; try { await addDoc(collection(db, "partners"), partnerData); logAction({ actionType: 'CRIAÇÃO', module: 'Corporativo', description: `adicionou o parceiro externo ${partnerData.name}.` }); return true; } catch (e) { return false; } };
+    const deletePartner = async (partnerId, partnerName) => { if(!db) return false; try { await deleteDoc(doc(db, "partners", partnerId)); logAction({ actionType: 'EXCLUSÃO', module: 'Corporativo', description: `removeu o parceiro externo ${partnerName}.` }); return true; } catch (e) { return false; } };
 
-    const value = { ...data, getClientById: (id) => data.clients.find(c => c.id === id), addClient, updateClient, deleteClient, addLead, updateLead, deleteLead, convertLeadToClient, addTask, updateTask, deleteTask, addOperator, deleteOperator, updateCompanyProfile, addCommission, updateCommission, deleteCommission, addKanbanColumn, deleteKanbanColumn, updateKanbanColumnOrder, toggleEventCompletion, logAction };
+
+    const value = { ...data, actionableEvents, getClientById: (id) => data.clients.find(c => c.id === id), addClient, updateClient, deleteClient, addLead, updateLead, deleteLead, convertLeadToClient, addTask, updateTask, deleteTask, addOperator, deleteOperator, updateCompanyProfile, addCommission, updateCommission, deleteCommission, addKanbanColumn, deleteKanbanColumn, updateKanbanColumnOrder, toggleEventCompletion, logAction, addPartner, deletePartner };
     return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
 };
 const useData = () => useContext(DataContext);
@@ -308,8 +609,40 @@ const GeneralInfoForm = ({ formData, handleChange, errors }) => (
         </div>
     </FormSection>
 );
-const InternalDataForm = ({ formData, handleChange }) => { const { users } = useData(); return (<FormSection title="Dados Internos e Gestão" cols={2}><div><Label>Corretor Responsável</Label><Select name="internal.brokerId" value={formData?.internal?.brokerId || ''} onChange={handleChange}><option value="">Selecione...</option>{users.filter(u => u.permissionLevel === 'Corretor').map(u => <option key={u.id} value={u.id}>{u?.name}</option>)}</Select></div><div><Label>Supervisor</Label><Select name="internal.supervisorId" value={formData?.internal?.supervisorId || ''} onChange={handleChange}><option value="">Selecione...</option>{users.filter(u => u.permissionLevel === 'Supervisor').map(u => <option key={u.id} value={u.id}>{u?.name}</option>)}</Select></div></FormSection>); };
+const InternalDataForm = ({ formData, handleChange }) => {
+    const { users, partners } = useData();
 
+    const allBrokers = useMemo(() => {
+        const internal = users.filter(u => u.permissionLevel === 'Corretor').map(u => ({ id: u.id, name: u.name }));
+        const external = partners.filter(p => p.type === 'Corretor').map(p => ({ id: p.id, name: `${p.name} (Parceiro)` }));
+        return [...internal, ...external].sort((a, b) => a.name.localeCompare(b.name));
+    }, [users, partners]);
+
+    const allSupervisors = useMemo(() => {
+        const internal = users.filter(u => u.permissionLevel === 'Supervisor').map(u => ({ id: u.id, name: u.name }));
+        const external = partners.filter(p => p.type === 'Supervisor').map(p => ({ id: p.id, name: `${p.name} (Parceiro)` }));
+        return [...internal, ...external].sort((a, b) => a.name.localeCompare(b.name));
+    }, [users, partners]);
+
+    return (
+        <FormSection title="Dados Internos e Gestão" cols={2}>
+            <div>
+                <Label>Corretor Responsável</Label>
+                <Select name="internal.brokerId" value={formData?.internal?.brokerId || ''} onChange={handleChange}>
+                    <option value="">Selecione...</option>
+                    {allBrokers.map(u => <option key={u.id} value={u.id}>{u?.name}</option>)}
+                </Select>
+            </div>
+            <div>
+                <Label>Supervisor</Label>
+                <Select name="internal.supervisorId" value={formData?.internal?.supervisorId || ''} onChange={handleChange}>
+                    <option value="">Selecione...</option>
+                    {allSupervisors.map(u => <option key={u.id} value={u.id}>{u?.name}</option>)}
+                </Select>
+            </div>
+        </FormSection>
+    );
+};
 const BeneficiaryModal = ({ isOpen, onClose, onSave, beneficiary }) => {
     const getInitialFormState = () => ({ id: null, name: '', cpf: '', dob: '', kinship: 'Titular', weight: '', height: '', idCardNumber: '', credentials: { appLogin: '', appPassword: '' } });
     const [formState, setFormState] = useState(getInitialFormState());
@@ -472,9 +805,65 @@ const BeneficiariesForm = ({ beneficiaries, setBeneficiaries, toast }) => {
 const HistoryForm = ({ observations, setObservations }) => { const { user } = useAuth(); const [newObservation, setNewObservation] = useState(''); const handleAddObservation = () => { if (!newObservation.trim()) return; const observationEntry = { text: newObservation, authorId: user.uid, authorName: user.name, timestamp: new Date() }; setObservations([observationEntry, ...(observations || [])]); setNewObservation(''); }; return (<div className="mb-8"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80 border-b border-gray-200 dark:border-white/10 pb-3 mb-6">Histórico de Observações</h3><div className="space-y-4"><div><Label>Nova Observação</Label><Textarea value={newObservation} onChange={(e) => setNewObservation(e.target.value)} rows={4} placeholder="Adicione uma nova anotação sobre a interação com o cliente..." /><div className="text-right mt-2"><Button type="button" size="sm" onClick={handleAddObservation}>Adicionar ao Histórico</Button></div></div><div className="space-y-4 max-h-96 overflow-y-auto pr-2">{(observations || []).length === 0 ? (<p className="text-gray-500 text-center py-4">Nenhuma observação registrada.</p>) : ((observations || []).map((obs, index) => (<div key={index} className="bg-gray-100 dark:bg-black/20 p-4 rounded-lg"><p className="text-gray-800 dark:text-gray-200 whitespace-pre-wrap">{obs.text}</p><p className="text-xs text-gray-500 dark:text-gray-500 mt-2 text-right">{obs.authorName} em {formatDateTime(obs.timestamp)}</p></div>)))}</div></div></div>); };
 const DetailItem = memo(( { label, value, isPassword = false, isLink = false, children, isCurrency = false } ) => { const { toast } = useToast(); const [showPassword, setShowPassword] = useState(false); const handleCopy = () => { try { const tempInput = document.createElement('textarea'); tempInput.value = value; document.body.appendChild(tempInput); tempInput.select(); document.execCommand('copy'); document.body.removeChild(tempInput); toast({ title: 'Copiado!', description: `${label} copiado.` }); } catch (err) { toast({ title: 'Erro', description: `Não foi possível copiar.`, variant: 'destructive' }); } }; const displayValue = value || 'N/A'; return (<div className="py-3"><Label>{label}</Label><div className="flex items-center justify-between mt-1 group"><div className="text-md text-gray-800 dark:text-gray-100 break-words">{children ? children : (isLink && value ? <a href={value} target="_blank" rel="noopener noreferrer" className="text-cyan-600 dark:text-cyan-400 hover:underline">{displayValue}</a> : (isPassword && !showPassword ? '••••••••' : (isCurrency ? formatCurrency(value) : displayValue)))}</div><div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">{isPassword && value && (<Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setShowPassword(!showPassword)}>{showPassword ? <EyeOffIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}</Button>)}{value && (<Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleCopy}><CopyIcon className="h-4 w-4" /></Button>)}</div></div></div>); });
 const InternalTab = ({ client }) => { const { users } = useData(); const broker = users.find(u => u.id === client?.internal?.brokerId); const supervisor = users.find(u => u.id === client?.internal?.supervisorId); return (<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-1"><DetailItem label="Corretor" value={broker?.name} /><DetailItem label="Supervisor" value={supervisor?.name} /></div>); };
+const BeneficiaryViewModal = ({ isOpen, onClose, beneficiary }) => {
+    if (!beneficiary) return null;
 
+    const getImcDisplay = (weightStr, heightStr) => {
+        const weight = parseFloat(weightStr);
+        const height = parseFloat(heightStr);
+        if (weight > 0 && height > 0) {
+            const heightInMeters = height / 100;
+            const imcValue = weight / (heightInMeters * heightInMeters);
+            let classification = '';
+            if (imcValue < 18.5) classification = 'Abaixo do peso';
+            else if (imcValue >= 18.5 && imcValue <= 24.9) classification = 'Normal';
+            else if (imcValue >= 25 && imcValue <= 29.9) classification = 'Sobrepeso';
+            else if (imcValue >= 30) classification = 'Obesidade';
+            return `${imcValue.toFixed(2)} - ${classification}`;
+        }
+        return 'N/A';
+    };
+
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title={`Detalhes de ${beneficiary.name}`}>
+            <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-1">
+                    <DetailItem label="Nome Completo" value={beneficiary.name} />
+                    <DetailItem label="CPF" value={beneficiary.cpf} />
+                    <DetailItem label="Parentesco" value={beneficiary.kinship} />
+                    <DetailItem label="Data de Nascimento" value={formatDate(beneficiary.dob)} />
+                    <DetailItem label="Idade" value={calculateAge(beneficiary.dob) !== null ? `${calculateAge(beneficiary.dob)} anos` : 'N/A'} />
+                    <DetailItem label="Número da Carteirinha" value={beneficiary.idCardNumber} />
+                    <DetailItem label="Peso" value={beneficiary.weight ? `${beneficiary.weight} kg` : 'N/A'} />
+                    <DetailItem label="Altura" value={beneficiary.height ? `${beneficiary.height} cm` : 'N/A'} />
+                    <DetailItem label="IMC" value={getImcDisplay(beneficiary.weight, beneficiary.height)} />
+                </div>
+
+                {beneficiary.credentials && (beneficiary.credentials.appLogin || beneficiary.credentials.appPassword) && (
+                    <div className="mt-6 pt-4 border-t border-gray-200/50 dark:border-white/10">
+                        <h5 className="text-md font-bold text-gray-700 dark:text-gray-200 mb-2">Credenciais do Beneficiário</h5>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1">
+                            <DetailItem label="Login do App" value={beneficiary.credentials.appLogin} />
+                            <DetailItem label="Senha do App" value={beneficiary.credentials.appPassword} isPassword />
+                        </div>
+                    </div>
+                )}
+            </div>
+             <div className="flex justify-end mt-6 pt-4 border-t border-gray-200 dark:border-white/10">
+                <Button variant="outline" onClick={onClose}>Fechar</Button>
+            </div>
+        </Modal>
+    );
+};
 const BeneficiariesTab = ({ client }) => {
-    // Função para calcular o IMC e a classificação para exibição
+    const [isViewModalOpen, setViewModalOpen] = useState(false);
+    const [selectedBeneficiary, setSelectedBeneficiary] = useState(null);
+
+    const handleOpenViewModal = (beneficiary) => {
+        setSelectedBeneficiary(beneficiary);
+        setViewModalOpen(true);
+    };
+
     const getImcDisplay = (weightStr, heightStr) => {
         const weight = parseFloat(weightStr);
         const height = parseFloat(heightStr);
@@ -496,7 +885,11 @@ const BeneficiariesTab = ({ client }) => {
             {(client?.beneficiaries || []).length > 0 ? (
                 <div className="space-y-4">
                     {(client?.beneficiaries || []).map(ben => (
-                        <GlassPanel key={ben?.id} className="p-4 bg-gray-100 dark:bg-black/20">
+                        <GlassPanel 
+                            key={ben?.id} 
+                            className="p-4 bg-gray-100 dark:bg-black/20 hover:bg-cyan-500/5 dark:hover:bg-cyan-500/10 cursor-pointer transition-colors duration-200"
+                            onClick={() => handleOpenViewModal(ben)}
+                        >
                             <h4 className="font-semibold text-lg text-gray-900 dark:text-white mb-2">
                                 {ben?.name} <span className="text-sm font-normal text-gray-600 dark:text-gray-400">- {ben?.kinship}</span>
                             </h4>
@@ -524,6 +917,12 @@ const BeneficiariesTab = ({ client }) => {
             ) : (
                 <p className="text-gray-500">Nenhum beneficiário cadastrado.</p>
             )}
+
+            <BeneficiaryViewModal 
+                isOpen={isViewModalOpen} 
+                onClose={() => setViewModalOpen(false)} 
+                beneficiary={selectedBeneficiary} 
+            />
         </div>
     );
 }
@@ -692,7 +1091,80 @@ const CredentialModal = ({ isOpen, onClose, onSave, credential }) => {
     );
 };
 const AddCollaboratorModal = ({ isOpen, onClose, onSave }) => { const [formData, setFormData] = useState({ name: '', email: '', password: '', permissionLevel: 'Corretor', supervisorId: '' }); const { users } = useData(); const handleChange = (e) => setFormData(prev => ({...prev, [e.target.name]: e.target.value })); const handleSubmit = (e) => { e.preventDefault(); onSave(formData); setFormData({ name: '', email: '', password: '', permissionLevel: 'Corretor', supervisorId: '' }); }; return (<Modal isOpen={isOpen} onClose={onClose} title="Adicionar Novo Colaborador"><form onSubmit={handleSubmit} className="space-y-4"><div><Label>Nome Completo</Label><Input name="name" onChange={handleChange} required /></div><div><Label>Email</Label><Input type="email" name="email" onChange={handleChange} required /></div><div><Label>Senha</Label><Input type="password" name="password" onChange={handleChange} required /></div><div><Label>Nível de Permissão</Label><Select name="permissionLevel" value={formData.permissionLevel} onChange={handleChange}><option>Corretor</option><option>Supervisor</option><option>Admin</option></Select></div>{formData.permissionLevel === 'Corretor' && (<div><Label>Vincular ao Supervisor</Label><Select name="supervisorId" value={formData.supervisorId} onChange={handleChange}><option value="">Nenhum</option>{users.filter(u => u.permissionLevel === 'Supervisor').map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></div>)}<div className="flex justify-end gap-4 pt-4"><Button type="button" variant="outline" onClick={onClose}>Cancelar</Button><Button type="submit">Adicionar</Button></div></form></Modal>); };
-const AddOperatorModal = ({ isOpen, onClose, onSave }) => { const [name, setName] = useState(''); const handleSubmit = (e) => { e.preventDefault(); onSave({ name }); setName(''); }; return (<Modal isOpen={isOpen} onClose={onClose} title="Adicionar Nova Operadora"><form onSubmit={handleSubmit} className="space-y-4"><div><Label>Nome da Operadora</Label><Input value={name} onChange={(e) => setName(e.target.value)} required /></div><div className="flex justify-end gap-4 pt-4"><Button type="button" variant="outline" onClick={onClose}>Cancelar</Button><Button type="submit">Adicionar</Button></div></form></Modal>); };
+const AddPartnerModal = ({ isOpen, onClose, onSave }) => {
+    const [formData, setFormData] = useState({ name: '', type: 'Corretor', document: '', email: '', phone: '', notes: '' });
+    const handleChange = (e) => setFormData(prev => ({...prev, [e.target.name]: e.target.value }));
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        onSave(formData);
+        setFormData({ name: '', type: 'Corretor', document: '', email: '', phone: '', notes: '' });
+    };
+
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title="Adicionar Novo Parceiro Externo">
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <div><Label>Nome Completo</Label><Input name="name" value={formData.name} onChange={handleChange} required /></div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div><Label>Tipo</Label><Select name="type" value={formData.type} onChange={handleChange}><option>Corretor</option><option>Supervisor</option></Select></div>
+                    <div><Label>CPF/CNPJ</Label><Input name="document" value={formData.document} onChange={handleChange} /></div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div><Label>Email</Label><Input type="email" name="email" value={formData.email} onChange={handleChange} /></div>
+                    <div><Label>Telefone</Label><Input type="tel" name="phone" value={formData.phone} onChange={handleChange} /></div>
+                </div>
+                <div><Label>Observações</Label><Textarea name="notes" value={formData.notes} onChange={handleChange} rows={3} /></div>
+                <div className="flex justify-end gap-4 pt-4">
+                    <Button type="button" variant="outline" onClick={onClose}>Cancelar</Button>
+                    <Button type="submit">Adicionar Parceiro</Button>
+                </div>
+            </form>
+        </Modal>
+    );
+};
+const AddOperatorModal = ({ isOpen, onClose, onSave, operator }) => {
+    const getInitialState = () => ({ name: '', managerName: '', managerPhone: '', managerEmail: '', portalLink: '' });
+    const [formData, setFormData] = useState(getInitialState());
+
+    useEffect(() => {
+        if (isOpen) {
+            if (operator) {
+                setFormData(operator);
+            } else {
+                setFormData(getInitialState());
+            }
+        }
+    }, [operator, isOpen]);
+    
+    const handleChange = (e) => {
+        setFormData(prev => ({...prev, [e.target.name]: e.target.value}));
+    };
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        if (formData.name.trim()) {
+            onSave(formData);
+        }
+    };
+
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title={operator ? "Editar Operadora" : "Adicionar Nova Operadora"}>
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <div><Label>Nome da Operadora (Obrigatório)</Label><Input name="name" value={formData.name} onChange={handleChange} required /></div>
+                <h4 className="text-md font-semibold text-cyan-600 dark:text-cyan-400/80 border-t pt-4 mt-4">Dados Opcionais</h4>
+                <div><Label>Gerente de Contas</Label><Input name="managerName" value={formData.managerName || ''} onChange={handleChange} /></div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div><Label>Telefone do Gerente</Label><Input type="tel" name="managerPhone" value={formData.managerPhone || ''} onChange={handleChange} /></div>
+                    <div><Label>Email do Gerente</Label><Input type="email" name="managerEmail" value={formData.managerEmail || ''} onChange={handleChange} /></div>
+                </div>
+                <div><Label>Link do Portal do Corretor</Label><Input name="portalLink" value={formData.portalLink || ''} onChange={handleChange} placeholder="https://..." /></div>
+                <div className="flex justify-end gap-4 pt-4">
+                    <Button type="button" variant="outline" onClick={onClose}>Cancelar</Button>
+                    <Button type="submit">{operator ? 'Salvar Alterações' : 'Adicionar'}</Button>
+                </div>
+            </form>
+        </Modal>
+    );
+};
 const TaskModal = ({ isOpen, onClose, onSave, task }) => { const { users, clients, leads } = useData(); const [formState, setFormState] = useState({}); useEffect(() => { setFormState(task ? task : { title: '', description: '', assignedTo: '', dueDate: '', priority: 'Média', linkedToId: '', linkedToType: '', status: 'Pendente' }); }, [task, isOpen]); const handleChange = (e) => setFormState(p => ({ ...p, [e.target.name]: e.target.value })); const handleLinkChange = (e) => { const [type, id] = e.target.value.split('-'); setFormState(p => ({ ...p, linkedToType: type, linkedToId: id })); }; const handleSubmit = (e) => { e.preventDefault(); onSave(formState); }; const linkedValue = formState.linkedToType && formState.linkedToId ? `${formState.linkedToType}-${formState.linkedToId}` : ''; return (<Modal isOpen={isOpen} onClose={onClose} title={task ? "Editar Tarefa" : "Adicionar Nova Tarefa"}><form onSubmit={handleSubmit} className="space-y-4"><div><Label>Título</Label><Input name="title" value={formState.title || ''} onChange={handleChange} required /></div><div><Label>Descrição</Label><Textarea name="description" value={formState.description || ''} onChange={handleChange} rows={3} /></div><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div><Label>Responsável</Label><Select name="assignedTo" value={formState.assignedTo || ''} onChange={handleChange}><option value="">Ninguém</option>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></div><div><Label>Data de Vencimento</Label><DateField name="dueDate" value={formState.dueDate || ''} onChange={handleChange} /></div></div><div><Label>Prioridade</Label><Select name="priority" value={formState.priority || 'Média'} onChange={handleChange}><option>Baixa</option><option>Média</option><option>Alta</option></Select></div><div><Label>Vincular a Cliente/Lead</Label><Select value={linkedValue} onChange={handleLinkChange}><option value="">Nenhum</option><optgroup label="Clientes">{clients.map(c => <option key={c.id} value={`client-${c.id}`}>{c.general?.holderName || c.general?.companyName}</option>)}</optgroup><optgroup label="Leads">{leads.map(l => <option key={l.id} value={`lead-${l.id}`}>{l.name}</option>)}</optgroup></Select></div><div className="flex justify-end gap-4 pt-4"><Button type="button" variant="outline" onClick={onClose}>Cancelar</Button><Button type="submit">Salvar Tarefa</Button></div></form></Modal>); };
 const ConfirmModal = ({ isOpen, onClose, onConfirm, title, description }) => { if (!isOpen) return null; return (<Modal isOpen={isOpen} onClose={onClose} title={title || "Confirmar Ação"}><p className="text-gray-700 dark:text-gray-300">{description || "Tem certeza que deseja prosseguir?"}</p><div className="flex justify-end gap-4 mt-6"><Button variant="outline" onClick={onClose}>Cancelar</Button><Button variant="destructive" onClick={onConfirm}>Confirmar</Button></div></Modal>); };
 const ContractModal = ({ isOpen, onClose, onSave, contract, clientType }) => {
@@ -1245,201 +1717,389 @@ function ClientDetails({ client, onBack, onEdit }) {
         </div>
     );
 };
-function CorporatePage({ onNavigate }) { const { users, operators, addOperator, deleteOperator, companyProfile, updateCompanyProfile } = useData(); const { user, addUser, deleteUser } = useAuth(); const { toast } = useToast(); const confirm = useConfirm(); const [isUserModalOpen, setUserModalOpen] = useState(false); const [isOperatorModalOpen, setOperatorModalOpen] = useState(false); const [companyData, setCompanyData] = useState({}); useEffect(() => { setCompanyData(companyProfile || {}); }, [companyProfile]); const handleCompanyDataChange = (e) => setCompanyData(prev => ({ ...prev, [e.target.name]: e.target.value })); const handleSaveCompanyProfile = async () => { const success = await updateCompanyProfile(companyData); toast({ title: success ? "Sucesso" : "Erro", description: success ? "Dados da empresa atualizados." : "Não foi possível salvar os dados.", variant: success ? 'default' : 'destructive' }); }; const handleDeleteOperator = async (operator) => { try { await confirm({ title: `Remover ${operator.name}?`, description: "Tem a certeza?" }); const success = await deleteOperator(operator.id, operator.name); toast({ title: success ? "Removida" : "Erro", description: `${operator.name} foi ${success ? 'removida' : 'impossível de remover'}.`, variant: success ? 'default' : 'destructive' }); } catch (e) {} }; const handleDeleteUser = async (userToDelete) => { if (userToDelete.id === user.id) { toast({ title: "Ação Inválida", description: "Não pode excluir a própria conta.", variant: "destructive" }); return; } try { await confirm({ title: `Excluir ${userToDelete.name}?`, description: "Tem certeza?" }); const success = await deleteUser(userToDelete.id); toast({ title: success ? "Removido" : "Erro", description: `${userToDelete.name} foi ${success ? 'removido' : 'impossível de remover'}.`, variant: success ? 'default' : 'destructive' }); } catch (e) {} }; const handleAddOperator = async (newOperatorData) => { const success = await addOperator(newOperatorData); toast({ title: success ? "Adicionada" : "Erro", description: `${newOperatorData.name} foi ${success ? 'adicionada' : 'impossível de adicionar'}.`, variant: success ? 'default' : 'destructive' }); if (success) setOperatorModalOpen(false); }; const handleAddUser = async (newUserData) => { const result = await addUser(newUserData); toast({ title: result.success ? "Adicionado" : "Erro", description: result.success ? `${newUserData.name} foi adicionado.` : `Erro: ${result.code}`, variant: result.success ? 'default' : 'destructive' }); if (result.success) setUserModalOpen(false); }; return (<div className="p-4 sm:p-6 lg:p-8"><h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-6">Gestão Corporativa</h2><GlassPanel className="p-6"><Tabs defaultValue="collaborators"><TabsList><TabsTrigger value="collaborators">Colaboradores</TabsTrigger><TabsTrigger value="operators">Operadoras</TabsTrigger><TabsTrigger value="company">Minha Empresa</TabsTrigger></TabsList><TabsContent value="collaborators"><div className="flex justify-between items-center mb-4"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80">Utilizadores</h3><Button onClick={() => setUserModalOpen(true)}><PlusCircleIcon className="h-4 w-4 mr-2" />Adicionar</Button></div><div className="bg-gray-100 dark:bg-black/20 rounded-lg p-4 space-y-3">{users.map(u => (<div key={u.id} className="flex justify-between items-center bg-gray-200/70 dark:bg-gray-800/70 p-3 rounded-md"><div><p className="font-medium text-gray-900 dark:text-white">{u?.name}</p><p className="text-sm text-gray-600 dark:text-gray-400">{u?.email} - <span className="font-semibold">{u?.permissionLevel}</span></p></div><Button variant="ghost" size="icon" className="h-8 w-8 text-red-500/70 hover:text-red-400" onClick={() => handleDeleteUser(u)} disabled={u.id === user.id}><Trash2Icon className="h-4 w-4" /></Button></div>))}</div></TabsContent><TabsContent value="operators"><div className="flex justify-between items-center mb-4"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80">Operadoras</h3><Button onClick={() => setOperatorModalOpen(true)}><PlusCircleIcon className="h-4 w-4 mr-2" />Adicionar</Button></div><div className="bg-gray-100 dark:bg-black/20 rounded-lg p-4 space-y-3">{operators.map(op => (<div key={op.id} className="flex justify-between items-center bg-gray-200/70 dark:bg-gray-800/70 p-3 rounded-md"><p className="font-medium text-gray-900 dark:text-white">{op.name}</p><Button variant="ghost" size="icon" className="h-8 w-8 text-red-500/70 hover:text-red-400" onClick={() => handleDeleteOperator(op)}><Trash2Icon className="h-4 w-4" /></Button></div>))}</div></TabsContent><TabsContent value="company"><FormSection title="Dados da Empresa"><div><Label>Nome da Empresa</Label><Input name="companyName" value={companyData.companyName || ''} onChange={handleCompanyDataChange} /></div><div><Label>CNPJ</Label><Input name="cnpj" value={companyData.cnpj || ''} onChange={handleCompanyDataChange} /></div><div><Label>Endereço</Label><Input name="address" value={companyData.address || ''} onChange={handleCompanyDataChange} /></div></FormSection><div className="flex justify-end"><Button onClick={handleSaveCompanyProfile}>Salvar</Button></div></TabsContent></Tabs></GlassPanel><AddCollaboratorModal isOpen={isUserModalOpen} onClose={() => setUserModalOpen(false)} onSave={handleAddUser} /><AddOperatorModal isOpen={isOperatorModalOpen} onClose={() => setOperatorModalOpen(false)} onSave={handleAddOperator} /></div>); };
+function CorporatePage({ onNavigate }) {
+    const { users, operators, addOperator, updateOperator, deleteOperator, companyProfile, updateCompanyProfile, partners, addPartner, deletePartner, clients, leads, tasks } = useData();
+    const { user, addUser, deleteUser } = useAuth();
+    const { toast } = useToast();
+    const confirm = useConfirm();
+    const [isUserModalOpen, setUserModalOpen] = useState(false);
+    const [isOperatorModalOpen, setOperatorModalOpen] = useState(false);
+    const [isPartnerModalOpen, setPartnerModalOpen] = useState(false);
+    const [editingOperator, setEditingOperator] = useState(null);
+    const [companyData, setCompanyData] = useState({});
+    const [expandedOperatorId, setExpandedOperatorId] = useState(null);
+
+    useEffect(() => { setCompanyData(companyProfile || {}); }, [companyProfile]);
+    
+    const handleCompanyDataChange = (e) => setCompanyData(prev => ({ ...prev, [e.target.name]: e.target.value }));
+    const handleSaveCompanyProfile = async () => { const success = await updateCompanyProfile(companyData); toast({ title: success ? "Sucesso" : "Erro", description: success ? "Dados da empresa atualizados." : "Não foi possível salvar os dados.", variant: success ? 'default' : 'destructive' }); };
+    
+    const handleDeleteOperator = async (operator) => { try { await confirm({ title: `Remover ${operator.name}?` }); const success = await deleteOperator(operator.id, operator.name); toast({ title: success ? "Removida" : "Erro", description: `${operator.name} foi ${success ? 'removida' : 'impossível de remover'}.`}); } catch (e) {} };
+    const handleDeleteUser = async (userToDelete) => { if (userToDelete.id === user.id) { toast({ title: "Ação Inválida", description: "Não pode excluir a própria conta.", variant: "destructive" }); return; } try { await confirm({ title: `Excluir ${userToDelete.name}?` }); const success = await deleteUser(userToDelete.id); toast({ title: success ? "Removido" : "Erro", description: `${userToDelete.name} foi ${success ? 'removido' : 'impossível de remover'}.` }); } catch (e) {} };
+    const handleDeletePartner = async (partner) => { try { await confirm({ title: `Remover ${partner.name}?` }); const success = await deletePartner(partner.id, partner.name); toast({ title: success ? "Removido" : "Erro", description: `${partner.name} foi ${success ? 'removido' : 'impossível de remover'}.` }); } catch (e) {} };
+    
+    const handleSaveOperator = async (operatorData) => {
+        const isEditing = !!operatorData.id;
+        const success = isEditing ? await updateOperator(operatorData.id, operatorData) : await addOperator(operatorData);
+        toast({ title: success ? "Sucesso!" : "Erro", description: `Operadora ${operatorData.name} foi ${isEditing ? 'atualizada' : 'adicionada'}.` });
+        if (success) {
+            setOperatorModalOpen(false);
+            setEditingOperator(null);
+        }
+    };
+
+    const handleOpenOperatorModal = (operator = null) => {
+        setEditingOperator(operator);
+        setOperatorModalOpen(true);
+    };
+
+    const handleAddUser = async (newUserData) => { const result = await addUser(newUserData); toast({ title: result.success ? "Adicionado" : "Erro", description: result.success ? `${newUserData.name} foi adicionado.` : `Erro: ${result.code}`, variant: result.success ? 'default' : 'destructive' }); if (result.success) setUserModalOpen(false); };
+    const handleAddPartner = async (newPartnerData) => { const success = await addPartner(newPartnerData); toast({ title: success ? "Adicionado" : "Erro", description: `${newPartnerData.name} foi adicionado como parceiro.` }); if (success) setPartnerModalOpen(false); };
+
+    return (
+    <div className="p-4 sm:p-6 lg:p-8">
+        <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-6">Gestão Corporativa</h2>
+        <GlassPanel className="p-6">
+            <Tabs defaultValue="team">
+                <TabsList>
+                    <TabsTrigger value="team">Equipe Interna (Usuários)</TabsTrigger>
+                    <TabsTrigger value="partners">Parceiros Externos</TabsTrigger>
+                    <TabsTrigger value="operators">Operadoras</TabsTrigger>
+                    <TabsTrigger value="company">Minha Empresa</TabsTrigger>
+                </TabsList>
+                
+                <TabsContent value="team">
+                    <div className="flex justify-between items-center mb-4"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80">Usuários do Sistema</h3><Button onClick={() => setUserModalOpen(true)}><PlusCircleIcon className="h-4 w-4 mr-2" />Adicionar Usuário</Button></div>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        {users.map(u => {
+                            const clientCount = clients.filter(c => c.internal?.brokerId === u.id).length;
+                            const leadCount = leads.filter(l => l.ownerId === u.id).length;
+                            const taskCount = tasks.filter(t => t.assignedTo === u.id && t.status !== 'Concluída').length;
+                            return (
+                                <GlassPanel key={u.id} className="p-4 flex items-start gap-4">
+                                    <Avatar className="h-12 w-12 text-xl mt-1"><AvatarFallback>{u?.name?.[0] || 'S'}</AvatarFallback></Avatar>
+                                    <div className="flex-grow">
+                                        <div className="flex justify-between items-start">
+                                            <div>
+                                                <p className="font-bold text-gray-900 dark:text-white">{u?.name}</p>
+                                                <p className="text-sm text-gray-600 dark:text-gray-400">{u?.email} - <span className="font-semibold">{u?.permissionLevel}</span></p>
+                                            </div>
+                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500/70 hover:text-red-400" onClick={() => handleDeleteUser(u)} disabled={u.id === user.id}><Trash2Icon className="h-4 w-4" /></Button>
+                                        </div>
+                                        <div className="flex gap-4 mt-3 text-sm border-t border-gray-200 dark:border-white/10 pt-3">
+                                            <span title="Clientes na Carteira"><strong>{clientCount}</strong> Clientes</span>
+                                            <span title="Leads Ativos"><strong>{leadCount}</strong> Leads</span>
+                                            <span title="Tarefas Pendentes"><strong>{taskCount}</strong> Tarefas</span>
+                                        </div>
+                                    </div>
+                                </GlassPanel>
+                            )
+                        })}
+                    </div>
+                </TabsContent>
+
+                <TabsContent value="partners">
+                    <div className="flex justify-between items-center mb-4"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80">Parceiros Comerciais (sem acesso)</h3><Button onClick={() => setPartnerModalOpen(true)}><PlusCircleIcon className="h-4 w-4 mr-2" />Adicionar Parceiro</Button></div>
+                     <div className="bg-gray-100 dark:bg-black/20 rounded-lg p-4 space-y-3">
+                        {partners.length === 0 && <p className="text-sm text-center text-gray-500 py-4">Nenhum parceiro externo cadastrado.</p>}
+                        {partners.map(p => (<div key={p.id} className="flex justify-between items-center bg-gray-200/70 dark:bg-gray-800/70 p-3 rounded-md"><div><p className="font-medium text-gray-900 dark:text-white">{p.name}</p><p className="text-sm text-gray-600 dark:text-gray-400">{p.email || 'Sem email'} - <span className="font-semibold">{p.type}</span></p></div><Button variant="ghost" size="icon" className="h-8 w-8 text-red-500/70 hover:text-red-400" onClick={() => handleDeletePartner(p)}><Trash2Icon className="h-4 w-4" /></Button></div>))}
+                    </div>
+                </TabsContent>
+                
+                <TabsContent value="operators">
+                    <div className="flex justify-between items-center mb-4"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80">Operadoras</h3><Button onClick={() => handleOpenOperatorModal()}><PlusCircleIcon className="h-4 w-4 mr-2" />Adicionar</Button></div>
+                    <div className="bg-gray-100 dark:bg-black/20 rounded-lg p-4 space-y-2">
+                        {operators.map(op => (
+                            <div key={op.id}>
+                                <div className="flex justify-between items-center bg-gray-200/70 dark:bg-gray-800/70 p-3 rounded-md">
+                                    <p className="font-medium text-gray-900 dark:text-white flex-grow cursor-pointer" onClick={() => setExpandedOperatorId(prev => prev === op.id ? null : op.id)}>{op.name}</p>
+                                    <div className="flex items-center gap-2">
+                                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleOpenOperatorModal(op)}><PencilIcon className="h-4 w-4" /></Button>
+                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500/70 hover:text-red-400" onClick={(e) => {e.stopPropagation(); handleDeleteOperator(op)}}><Trash2Icon className="h-4 w-4" /></Button>
+                                        <button onClick={() => setExpandedOperatorId(prev => prev === op.id ? null : op.id)} className="p-1">
+                                            <ChevronDownIcon className={cn("h-5 w-5 transition-transform", expandedOperatorId === op.id && "rotate-180")} />
+                                        </button>
+                                    </div>
+                                </div>
+                                {expandedOperatorId === op.id && (
+                                    <div className="p-4 bg-white dark:bg-gray-800 rounded-b-md">
+                                        <DetailItem label="Gerente de Contas" value={op.managerName} />
+                                        <DetailItem label="Telefone" value={op.managerPhone} />
+                                        <DetailItem label="Email" value={op.managerEmail} />
+                                        <DetailItem label="Portal do Corretor" value={op.portalLink} isLink />
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </TabsContent>
+                
+                <TabsContent value="company">
+                    <FormSection title="Dados da Empresa">
+                        <div><Label>Nome da Empresa</Label><Input name="companyName" value={companyData.companyName || ''} onChange={handleCompanyDataChange} /></div>
+                        <div><Label>CNPJ</Label><Input name="cnpj" value={companyData.cnpj || ''} onChange={handleCompanyDataChange} /></div>
+                        <div><Label>Endereço</Label><Input name="address" value={companyData.address || ''} onChange={handleCompanyDataChange} /></div>
+                        <div><Label>Logo da Empresa (URL)</Label><Input name="logoUrl" value={companyData.logoUrl || ''} onChange={handleCompanyDataChange} placeholder="https://site.com/logo.png"/></div>
+                    </FormSection>
+                     <FormSection title="Metas da Empresa (Opcional)">
+                        <div><Label>Meta de Faturamento Mensal</Label><Input type="number" name="goalRevenue" value={companyData.goalRevenue || ''} onChange={handleCompanyDataChange} /></div>
+                        <div><Label>Meta de Novos Clientes Mensal</Label><Input type="number" name="goalClients" value={companyData.goalClients || ''} onChange={handleCompanyDataChange} /></div>
+                    </FormSection>
+                    <div className="flex justify-end"><Button onClick={handleSaveCompanyProfile}>Salvar Alterações</Button></div>
+                </TabsContent>
+            </Tabs>
+        </GlassPanel>
+        
+        <AddCollaboratorModal isOpen={isUserModalOpen} onClose={() => setUserModalOpen(false)} onSave={handleAddUser} />
+        <AddOperatorModal isOpen={isOperatorModalOpen} onClose={() => { setOperatorModalOpen(false); setEditingOperator(null); }} onSave={handleSaveOperator} operator={editingOperator} />
+        <AddPartnerModal isOpen={isPartnerModalOpen} onClose={() => setPartnerModalOpen(false)} onSave={handleAddPartner} />
+    </div>);
+};
+const MiniCalendarPopover = ({ isOpen, onClose, onSelectDate, targetElement }) => {
+    const [currentDate, setCurrentDate] = useState(new Date());
+    const popoverRef = useRef(null);
+
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (popoverRef.current && !popoverRef.current.contains(event.target)) {
+                onClose();
+            }
+        };
+        if (isOpen) {
+            document.addEventListener('mousedown', handleClickOutside);
+        }
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, [isOpen, onClose]);
+
+    if (!isOpen || !targetElement) return null;
+
+    // Lógica de posicionamento simplificada para evitar erros
+    const popoverWidth = 288; // Largura do popover (w-72)
+    const popoverRect = targetElement.getBoundingClientRect();
+    
+    // Alinha a borda DIREITA do popover com a borda DIREITA do botão
+    const leftPosition = popoverRect.right + window.scrollX - popoverWidth;
+    const topPosition = popoverRect.bottom + window.scrollY + 5;
+
+    const style = {
+        position: 'absolute',
+        top: `${topPosition}px`,
+        left: `${leftPosition}px`,
+        zIndex: 100,
+    };
+
+    const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+    const daysInMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
+    const startingDay = firstDayOfMonth.getDay();
+
+    const changeMonth = (offset) => {
+        setCurrentDate(prev => new Date(prev.getFullYear(), prev.getMonth() + offset, 1));
+    };
+
+    return createPortal(
+        <div ref={popoverRef} style={style}>
+            <GlassPanel className="p-4 w-72">
+                <div className="flex justify-between items-center mb-2">
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => changeMonth(-1)}><ChevronLeftIcon /></Button>
+                    <span className="font-semibold text-sm capitalize text-gray-900 dark:text-white">{currentDate.toLocaleString('pt-BR', { month: 'long', year: 'numeric' })}</span>
+                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => changeMonth(1)}><ChevronRightIcon /></Button>
+                </div>
+                <div className="grid grid-cols-7 text-center text-xs text-gray-500 dark:text-gray-300">
+                    {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((d, i) => <div key={i} className="w-8 h-8 flex items-center justify-center">{d}</div>)}
+                </div>
+                <div className="grid grid-cols-7">
+                    {Array.from({ length: startingDay }).map((_, i) => <div key={`empty-${i}`}></div>)}
+                    {Array.from({ length: daysInMonth }, (_, i) => i + 1).map(day => {
+                        const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
+                        const isToday = date.toDateString() === new Date().toDateString();
+                        return (
+                            <button
+                                key={day}
+                                onClick={() => onSelectDate(date)}
+                                className={cn(
+                                    "w-8 h-8 rounded-full hover:bg-cyan-500/20 text-gray-800 dark:text-gray-200",
+                                    isToday && "ring-2 ring-cyan-500"
+                                )}
+                            >
+                                {day}
+                            </button>
+                        )
+                    })}
+                </div>
+            </GlassPanel>
+        </div>,
+        document.body
+    );
+};
+
+
 function CalendarPage({ onNavigate }) {
-    const { clients, tasks, commissions, users, completedEvents, toggleEventCompletion, updateClient } = useData();
+    const { users, completedEvents, toggleEventCompletion, updateClient, actionableEvents } = useData();
     const { toast } = useToast();
     const [currentDate, setCurrentDate] = useState(new Date());
     const [selectedDate, setSelectedDate] = useState(new Date());
-    const [selectedEvent, setSelectedEvent] = useState(null);
-    const [isDetailModalOpen, setDetailModalOpen] = useState(false);
-    const [newDateForEvent, setNewDateForEvent] = useState('');
-    const [selectedCredentialId, setSelectedCredentialId] = useState('');
+    const [popoverState, setPopoverState] = useState({ isOpen: false, event: null, target: null });
 
 
-
-    const allEvents = useMemo(() => {
-        const generatedEvents = [];
-        const addEvent = (event) => { if (event.date && !isNaN(event.date.getTime())) { generatedEvents.push(event); } };
-
-        clients.forEach(client => {
-            (client.contracts || []).forEach(contract => {
-                const end = contract.renewalDate ? new Date(contract.renewalDate + 'T23:59:59') : new Date(new Date().getFullYear() + 5, 0, 1);
-                if (contract.boletoSentDate) {
-                    let current = new Date(contract.boletoSentDate + 'T00:00:00');
-                    while (current <= end) {
-                        const originalDateStr = current.toISOString().split('T')[0];
-                        const exception = (client.boletoExceptions || []).find(ex => ex.originalDate === originalDateStr);
-                        const eventDate = exception ? new Date(exception.modifiedDate + 'T00:00:00') : new Date(originalDateStr);
-                        const eventId = `boleto-${client.id}-${contract.id}-${originalDateStr}`;
-                        addEvent({ type: 'boletoSend', id: eventId, date: eventDate, data: { client, contract, originalDate: originalDateStr }, title: `Envio Boleto: ${client.general.holderName || client.general.companyName}`, color: 'bg-cyan-500', icon: FileTextIcon });
-                        current.setMonth(current.getMonth() + 1);
-                    }
-                }
-                if (contract.monthlyDueDate && contract.effectiveDate) {
-                    let current = new Date(contract.effectiveDate + 'T00:00:00');
-                    while(current <= end) {
-                        const dueDate = new Date(current.getFullYear(), current.getMonth(), parseInt(contract.monthlyDueDate, 10));
-                        addEvent({ type: 'boletoDue', id: `due-${client.id}-${contract.id}-${dueDate.toISOString()}`, date: dueDate, data: { client, contract }, title: `Vencimento: ${client.general.holderName || client.general.companyName}`, color: 'bg-yellow-500', icon: AlertTriangleIcon });
-                        current.setMonth(current.getMonth() + 1);
-                    }
-                }
-                if (contract.renewalDate) {
-                    addEvent({ type: 'renewal', id: `renewal-${client.id}-${contract.id}`, date: new Date(contract.renewalDate + 'T00:00:00'), data: { client, contract }, title: `Renovação: ${client.general.holderName || client.general.companyName}`, color: 'bg-violet-500', icon: AwardIcon });
-                }
-            });
-        });
-
-        tasks.forEach(task => {
-            if (task.priority === 'Alta' && task.dueDate) {
-                addEvent({ type: 'task', id: `task-${task.id}`, date: new Date(task.dueDate + 'T00:00:00'), data: { task }, title: `Tarefa: ${task.title}`, color: 'bg-red-500', icon: CheckSquareIcon });
-            }
-        });
-
-        commissions.forEach(com => {
-            if (com.firstDueDate) {
-                addEvent({ type: 'commission', id: `commission-${com.id}`, date: new Date(com.firstDueDate + 'T00:00:00'), data: { commission: com }, title: `Comissão: ${com.clientName}`, color: 'bg-green-500', icon: DollarSignIcon });
-            }
-        });
-
-        return generatedEvents;
-    }, [clients, tasks, commissions]);
+    const allEvents = actionableEvents;
 
     const completedEventIds = useMemo(() => new Set(completedEvents.map(e => e.eventId)), [completedEvents]);
 
     const eventsByDay = useMemo(() => {
         const eventsMap = {};
-        allEvents.forEach(event => {
-            const dayKey = event.date.toISOString().split('T')[0];
-            if (!eventsMap[dayKey]) eventsMap[dayKey] = [];
-            eventsMap[dayKey].push(event);
-        });
+        if (allEvents) {
+            allEvents.forEach(event => {
+                const dayKey = event.date.toISOString().split('T')[0];
+                if (!eventsMap[dayKey]) eventsMap[dayKey] = [];
+                eventsMap[dayKey].push(event);
+            });
+        }
         return eventsMap;
     }, [allEvents]);
-
-    const handleOpenEventDetails = (event) => {
-        setSelectedEvent(event);
-        setNewDateForEvent('');
-        const credentials = event.data?.contract?.credentialsList || [];
-        if (credentials.length === 1) {
-            setSelectedCredentialId(credentials[0].id);
-        } else {
-            setSelectedCredentialId('');
-        }
-        setDetailModalOpen(true);
-    };
-
-    const handleDateChange = async () => {
-        if (!selectedEvent || !newDateForEvent || selectedEvent.type !== 'boletoSend') return;
-        const { client, originalDate } = selectedEvent.data;
-        const exceptions = client.boletoExceptions || [];
-        const existingIndex = exceptions.findIndex(ex => ex.originalDate === originalDate);
-        if (existingIndex > -1) {
-            exceptions[existingIndex].modifiedDate = newDateForEvent;
-        } else {
-            exceptions.push({ originalDate: originalDate, modifiedDate: newDateForEvent });
-        }
-        const success = await updateClient(client.id, { ...client, boletoExceptions: exceptions });
-        if(success) {
-            toast({ title: 'Data Alterada!', description: `A data do boleto foi alterada para este mês.`});
-            setDetailModalOpen(false);
-        } else {
-            toast({ title: 'Erro', description: 'Não foi possível alterar a data.', variant: 'destructive'});
-        }
-    };
-
-    const handleActionClick = () => {
-        if (!selectedEvent) return;
-        setDetailModalOpen(false);
-        if (selectedEvent.type === 'task') {
-            onNavigate('tasks');
-        } else {
-            const clientId = selectedEvent.data.client?.id || selectedEvent.data.commission?.clientId;
-            if (clientId) {
-                onNavigate('client-details', clientId);
-            }
-        }
-    };
 
     const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
     const daysInMonth = Array.from({ length: new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate() }, (_, i) => new Date(currentDate.getFullYear(), currentDate.getMonth(), i + 1));
     const startingDay = firstDayOfMonth.getDay();
     const changeMonth = (offset) => setCurrentDate(prev => new Date(prev.getFullYear(), prev.getMonth() + offset, 1));
+    const todayKey = new Date().toISOString().split('T')[0];
 
-    const selectedDayEvents = eventsByDay[selectedDate.toISOString().split('T')[0]] || [];
+    const handlePostponeDateSelect = async (newDate) => {
+        const { event } = popoverState;
+        if (!event) return;
 
-    const EventDetailContent = () => {
-    if (!selectedEvent) return null;
+        const { client, originalDate } = event.data;
+        const newDateForEvent = newDate.toISOString().split('T')[0];
+        const exceptions = client.boletoExceptions || [];
+        const existingIndex = exceptions.findIndex(ex => ex.originalDate === originalDate);
 
-    const credentials = selectedEvent.data?.contract?.credentialsList || [];
-    const selectedCred = credentials.find(c => c.id === selectedCredentialId);
+        if (existingIndex > -1) {
+            exceptions[existingIndex].modifiedDate = newDateForEvent;
+        } else {
+            exceptions.push({ originalDate: originalDate, modifiedDate: newDateForEvent });
+        }
 
-    return (
-         <div>
+        const success = await updateClient(client.id, { ...client, boletoExceptions: exceptions });
+        if (success) {
+            toast({ title: 'Adiado!', description: `O envio do boleto foi adiado para ${newDate.toLocaleDateString('pt-BR')}.` });
+        } else {
+            toast({ title: 'Erro', description: 'Não foi possível adiar o evento.', variant: 'destructive' });
+        }
+        setPopoverState({ isOpen: false, event: null, target: null });
+    };
+
+
+    const DayAgenda = () => {
+        const dayKey = selectedDate.toISOString().split('T')[0];
+        const dayEvents = (eventsByDay[dayKey] || []).sort((a, b) => a.type.localeCompare(b.type));
+        const pendingEvents = dayEvents.filter(e => !completedEventIds.has(e.id));
+        const completedEventsToday = dayEvents.filter(e => completedEventIds.has(e.id));
+
+        const getWhatsAppLink = (client) => {
+            const phone = client?.general?.contactPhone || client?.general?.holderCpf;
+            if (!phone) return null;
+            return `https://wa.me/55${phone.replace(/\D/g, '')}`;
+        }
+
+        if (dayEvents.length === 0) {
+            return (<div className="text-center text-gray-500 pt-16 flex flex-col items-center">
+                <CalendarIcon className="h-12 w-12 mx-auto text-gray-400 dark:text-gray-600" />
+                <h4 className="font-semibold mt-4">Nenhum evento para este dia.</h4>
+                <p className="text-sm">Relaxe ou planeje o futuro!</p>
+            </div>);
+        }
+
+        return (
             <div className="space-y-4">
-                <div className="flex items-center gap-3">
-                    <div className={cn("w-10 h-10 rounded-lg flex-shrink-0 flex items-center justify-center text-white", selectedEvent.color)}><selectedEvent.icon className="w-6 h-6" /></div>
-                    <h3 className="text-xl font-bold text-gray-900 dark:text-white">{selectedEvent.title}</h3>
-                </div>
-                <DetailItem label="Responsável" value={ (selectedEvent.type === 'boletoSend' && users.find(u => u.id === selectedEvent.data.contract.boletoResponsibleId)?.name) || (selectedEvent.type === 'task' && users.find(u => u.id === selectedEvent.data.task.assignedTo)?.name) || 'N/A' } />
-
-                {selectedEvent.type === 'boletoSend' && (
-                    <div className="mt-4 pt-4 border-t border-gray-200/50 dark:border-white/10">
-                        <h5 className="text-md font-bold text-gray-700 dark:text-gray-200 mb-2">Credenciais do Contrato</h5>
-                        {credentials.length === 0 && <p className="text-sm text-gray-500">Nenhuma credencial cadastrada.</p>}
-                        {credentials.length > 1 && (
-                            <Select value={selectedCredentialId} onChange={(e) => setSelectedCredentialId(e.target.value)} className="mb-4">
-                                <option value="">Selecione a credencial...</option>
-                                {credentials.map(c => <option key={c.id} value={c.id}>{c.title}</option>)}
-                            </Select>
-                        )}
-                        {selectedCred && (
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-1">
-                                <DetailItem label="Email Criado" value={selectedCred.createdEmail} /><DetailItem label="Senha do Email" value={selectedCred.createdEmailPassword} isPassword />
-                                <DetailItem label="Site do Portal" value={selectedCred.portalSite} isLink /><DetailItem label="Senha do Portal" value={selectedCred.portalPassword} isPassword />
-                                <DetailItem label="Login do Portal" value={selectedCred.portalLogin} /><DetailItem label="Usuário do Portal" value={selectedCred.portalUser} />
-                                <DetailItem label="Login do App" value={selectedCred.appLogin} /><DetailItem label="Senha do App" value={selectedCred.appPassword} isPassword />
-                            </div>
-                        )}
+                {pendingEvents.length > 0 && (
+                    <div>
+                        <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-2">Pendentes</h4>
+                        <div className="space-y-3">
+                            {pendingEvents.map(event => {
+                                const responsible = users.find(u => u.id === event.data?.contract?.boletoResponsibleId || u.id === event.data?.task?.assignedTo);
+                                const whatsAppLink = getWhatsAppLink(event.data.client);
+                                return (
+                                    <GlassPanel key={event.id} className="p-3">
+                                        <div className="flex items-start gap-3">
+                                            <div className={cn("w-8 h-8 mt-1 rounded-lg flex-shrink-0 flex items-center justify-center text-white", event.color)}>
+                                                <event.icon className="w-5 h-5" />
+                                            </div>
+                                            <div className="flex-grow">
+                                                <p className="font-semibold text-sm text-gray-900 dark:text-white">{event.title}</p>
+                                                <p className="text-xs text-gray-500">Responsável: {responsible?.name || 'Não definido'}</p>
+                                            </div>
+                                            <Checkbox checked={false} onChange={(e) => toggleEventCompletion(event, e.target.checked)} title="Marcar como concluído" />
+                                        </div>
+                                        {event.type === 'boletoSend' && (
+                                            <div className="flex gap-2 mt-2 pl-11">
+                                                <Button size="sm" variant="outline" onClick={() => onNavigate('client-details', event.data.client.id)}>Ver Cliente</Button>
+                                                {whatsAppLink && <Button size="sm" as="a" href={whatsAppLink} target="_blank">WhatsApp</Button>}
+                                                <Button size="sm" variant="ghost" onClick={(e) => setPopoverState({ isOpen: true, event: event, target: e.currentTarget })}>Adiar</Button>
+                                            </div>
+                                        )}
+                                    </GlassPanel>
+                                )
+                            })}
+                        </div>
                     </div>
                 )}
-
-                {selectedEvent.type === 'boletoSend' && 
-                    <div className="pt-4 border-t border-gray-200 dark:border-white/10"><Label>Mudar Data (Apenas este mês)</Label><DateField value={newDateForEvent} onChange={(e) => setNewDateForEvent(e.target.value)} /></div>
-                }
+                {completedEventsToday.length > 0 && (
+                    <div>
+                        <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-2 mt-6">Concluídos</h4>
+                        <div className="space-y-2">
+                            {completedEventsToday.map(event => (
+                                <div key={event.id} className="p-2 rounded-lg flex items-center gap-3 opacity-60">
+                                    <Checkbox checked={true} onChange={(e) => toggleEventCompletion(event, e.target.checked)} />
+                                    <div className={cn("w-6 h-6 rounded-md flex-shrink-0 flex items-center justify-center text-white", event.color)}><event.icon className="w-4 h-4" /></div>
+                                    <p className="text-sm font-medium text-gray-600 dark:text-gray-400 line-through truncate">{event.title}</p>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
             </div>
-            <div className="flex justify-between items-center pt-6 mt-4 border-t border-gray-200 dark:border-white/10">
-                <label className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-                    <Checkbox checked={completedEventIds.has(selectedEvent.id)} onChange={(e) => toggleEventCompletion(selectedEvent, e.target.checked)} /> Marcar como Concluído
-                </label>
-                <div className="flex gap-2">
-                    {selectedEvent.type === 'boletoSend' && <Button onClick={handleDateChange} disabled={!newDateForEvent}>Salvar Nova Data</Button>}
-                    <Button variant="violet" onClick={handleActionClick}>{selectedEvent.type === 'task' ? 'Ir para Tarefa' : 'Ver Cliente'}</Button>
-                </div>
-            </div>
-        </div>
-    )
-}
+        )
+    }
 
     return (
         <div className="p-4 sm:p-6 lg:p-8 h-[calc(100vh-5rem)] flex flex-col">
             <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-6 flex-shrink-0">Calendário Inteligente</h2>
             <div className="flex-grow grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-0">
                 <GlassPanel className="p-6 lg:col-span-2 flex flex-col">
-                    <div className="flex justify-between items-center mb-4 flex-shrink-0"><Button variant="ghost" size="icon" onClick={() => changeMonth(-1)}><ChevronLeftIcon /></Button><h3 className="text-xl font-semibold text-gray-900 dark:text-white capitalize w-48 text-center">{currentDate.toLocaleString('pt-BR', { month: 'long', year: 'numeric' })}</h3><Button variant="ghost" size="icon" onClick={() => changeMonth(1)}><ChevronRightIcon /></Button></div>
+                    <div className="flex justify-between items-center mb-4 flex-shrink-0">
+                        <Button variant="ghost" size="icon" onClick={() => changeMonth(-1)}><ChevronLeftIcon /></Button>
+                        <h3 className="text-xl font-semibold text-gray-900 dark:text-white capitalize w-48 text-center">{currentDate.toLocaleString('pt-BR', { month: 'long', year: 'numeric' })}</h3>
+                        <Button variant="ghost" size="icon" onClick={() => changeMonth(1)}><ChevronRightIcon /></Button>
+                    </div>
                     <div className="grid grid-cols-7 gap-1 text-center text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">{['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(day => <div key={day} className="p-2">{day}</div>)}</div>
                     <div className="grid grid-cols-7 grid-rows-6 gap-1 flex-grow">
                         {Array.from({ length: startingDay }).map((_, i) => <div key={`empty-${i}`} className="border border-transparent"></div>)}
                         {daysInMonth.map(day => {
                             const dayKey = day.toISOString().split('T')[0];
                             const dayEvents = (eventsByDay[dayKey] || []).filter(e => !completedEventIds.has(e.id));
-                            const pins = dayEvents.reduce((acc, event) => { acc[event.color] = (acc[event.color] || 0) + 1; return acc; }, {});
                             const isSelected = day.toDateString() === selectedDate.toDateString();
+                            const isToday = dayKey === todayKey;
+
+                            const eventTypeColors = {
+                                boletoSend: 'bg-cyan-500',
+                                task: 'bg-red-500',
+                                renewal: 'bg-violet-500',
+                                boletoDue: 'bg-yellow-500',
+                            };
+                            const eventTypesOnDay = new Set(dayEvents.map(e => e.type));
+
                             return (
-                                <div key={dayKey} onClick={() => setSelectedDate(day)} className={cn("border border-gray-200 dark:border-white/10 p-2 flex flex-col hover:bg-gray-100 dark:hover:bg-white/5 transition-colors cursor-pointer", isSelected && "bg-cyan-100/50 dark:bg-cyan-900/30 ring-2 ring-cyan-500")}>
-                                    <span className="font-bold text-gray-800 dark:text-white">{day.getDate()}</span>
-                                    <div className="flex flex-wrap gap-1 mt-1">
-                                        {Object.entries(pins).map(([color, count]) => (<div key={color} className={cn("h-5 w-5 rounded-full flex items-center justify-center text-white text-[10px] font-bold", color)}>{count}</div>))}
+                                <div key={dayKey} onClick={() => setSelectedDate(day)} className={cn("border border-gray-200/50 dark:border-white/10 p-2 hover:bg-cyan-500/10 transition-colors cursor-pointer rounded-lg min-h-[5rem]", isSelected && "ring-2 ring-cyan-500", isToday && "bg-cyan-100/30 dark:bg-cyan-900/20")}>
+                                    <div className="flex items-center gap-2">
+                                        <span className={cn("font-bold", isToday ? "text-cyan-600 dark:text-cyan-300" : "text-gray-800 dark:text-white")}>{day.getDate()}</span>
+                                        {dayEvents.length > 0 &&
+                                            <div className="flex items-center gap-1">
+                                                {Array.from(eventTypesOnDay).slice(0, 4).map(type => (
+                                                    <div key={type} className={cn("w-2.5 h-2.5 rounded-full", eventTypeColors[type] || 'bg-gray-400')}></div>
+                                                ))}
+                                            </div>
+                                        }
                                     </div>
                                 </div>
                             )
@@ -1447,34 +2107,195 @@ function CalendarPage({ onNavigate }) {
                     </div>
                 </GlassPanel>
                 <GlassPanel className="p-6 flex flex-col">
-                    <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-4 flex-shrink-0">Agenda do Dia <span className="text-cyan-500">{selectedDate.toLocaleDateString('pt-BR', {day: '2-digit', month: 'long'})}</span></h3>
+                    <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-4 flex-shrink-0">Agenda do Dia <span className="text-cyan-500">{selectedDate.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' })}</span></h3>
                     <div className="flex-grow overflow-y-auto space-y-3 pr-2">
-                        {selectedDayEvents.length > 0 ? selectedDayEvents.map(event => {
-                            const isCompleted = completedEventIds.has(event.id);
-                            return (
-                            <div key={event.id} className={cn("p-3 rounded-lg flex items-center gap-3 transition-colors", isCompleted ? "bg-gray-200/50 dark:bg-black/30" : "bg-gray-100/70 dark:bg-black/20")}>
-                                <Checkbox checked={isCompleted} onChange={(e) => toggleEventCompletion(event, e.target.checked)} />
-                                <div onClick={() => handleOpenEventDetails(event)} className="flex items-center gap-3 cursor-pointer flex-grow"><div className={cn("w-8 h-8 rounded-lg flex-shrink-0 flex items-center justify-center text-white", event.color, isCompleted && "opacity-50")}><event.icon className="w-5 h-5" /></div><p className={cn("text-sm font-medium text-gray-800 dark:text-gray-200 flex-grow truncate", isCompleted && "line-through text-gray-500")}>{event.title}</p></div>
-                            </div>
-                        )}) : (<div className="text-center text-gray-500 pt-16"><CalendarIcon className="h-10 w-10 mx-auto text-gray-400 dark:text-gray-600"/><p className="mt-2 text-sm">Nenhum evento para este dia.</p></div>)}
+                        <DayAgenda />
                     </div>
                 </GlassPanel>
             </div>
-            <Modal isOpen={isDetailModalOpen} onClose={() => setDetailModalOpen(false)} title="Detalhes do Evento"><EventDetailContent /></Modal>
+            <MiniCalendarPopover
+                isOpen={popoverState.isOpen}
+                onClose={() => setPopoverState({ isOpen: false, event: null, target: null })}
+                onSelectDate={handlePostponeDateSelect}
+                targetElement={popoverState.target}
+            />
         </div>
     );
 };
 
 function ProfilePage() { const { user, updateUserProfile, updateUserPassword } = useAuth(); const { toast } = useToast(); const [name, setName] = useState(user?.name || ''); const [currentPassword, setCurrentPassword] = useState(''); const [newPassword, setNewPassword] = useState(''); const [confirmPassword, setConfirmPassword] = useState(''); useEffect(() => { if (user && user.name !== 'Usuário Incompleto') { setName(user.name); } }, [user]); const handleProfileUpdate = async (e) => { e.preventDefault(); const success = await updateUserProfile(user.uid, { name }); toast({ title: success ? "Sucesso" : "Erro", description: success ? "Nome atualizado." : "Não foi possível atualizar.", variant: success ? 'default' : 'destructive' }); }; const handlePasswordUpdate = async (e) => { e.preventDefault(); if (!currentPassword) { toast({ title: "Erro", description: "Insira sua senha atual.", variant: 'destructive' }); return; } if (newPassword !== confirmPassword) { toast({ title: "Erro", description: "As senhas não coincidem.", variant: 'destructive' }); return; } if (newPassword.length < 6) { toast({ title: "Erro", description: "A nova senha deve ter no mínimo 6 caracteres.", variant: 'destructive' }); return; } const result = await updateUserPassword(currentPassword, newPassword); if (result === true) { toast({ title: "Sucesso", description: "Senha atualizada." }); setCurrentPassword(''); setNewPassword(''); setConfirmPassword(''); } else { let errorMessage = "Não foi possível atualizar."; if (result === 'auth/wrong-password') errorMessage = "A senha atual está incorreta."; else if (result === 'auth/requires-recent-login') errorMessage = "Requer autenticação recente. Faça logout e login novamente."; toast({ title: "Erro", description: errorMessage, variant: 'destructive' }); } }; return (<div className="p-4 sm:p-6 lg:p-8"><h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-6">Meu Perfil</h2><div className="grid grid-cols-1 lg:grid-cols-2 gap-8"><GlassPanel className="p-6"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80 mb-6">Informações Pessoais</h3><form onSubmit={handleProfileUpdate} className="space-y-4"><div><Label>Foto</Label><div className="mt-2 flex items-center gap-4"><div className="w-20 h-20 rounded-full bg-violet-100 dark:bg-violet-900 flex items-center justify-center text-3xl font-bold text-violet-600 dark:text-violet-300 border-2 border-violet-300 dark:border-violet-700">{user?.name?.[0]}</div><Button type="button" variant="outline" disabled>Alterar Foto</Button></div></div><div><Label>Nome Completo</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div><div><Label>Email</Label><Input value={user?.email || ''} disabled /></div><div className="flex justify-end"><Button type="submit">Salvar</Button></div></form></GlassPanel><GlassPanel className="p-6"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80 mb-6">Alterar Senha</h3><form onSubmit={handlePasswordUpdate} className="space-y-4"><div><Label>Senha Atual</Label><Input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} required /></div><div><Label>Nova Senha</Label><Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required /></div><div><Label>Confirmar Nova Senha</Label><Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required /></div><div className="flex justify-end"><Button type="submit">Alterar Senha</Button></div></form></GlassPanel></div></div>); }
+
+const ArchivedLeadsModal = ({ isOpen, onClose, allLeads, onUnarchive }) => {
+    const archivedLeads = allLeads.filter(l => l.archived).sort((a, b) => (b.archivedAt?.toDate() || 0) - (a.archivedAt?.toDate() || 0));
+
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title="Leads Arquivados" size="5xl">
+            <div className="max-h-[60vh] overflow-y-auto">
+                {archivedLeads.length > 0 ? (
+                    <table className="min-w-full">
+                        <thead className="border-b border-gray-200 dark:border-white/10">
+                            <tr>
+                                <th className="px-4 py-3 text-left text-sm font-semibold text-gray-500 dark:text-gray-300">Nome do Lead</th>
+                                <th className="px-4 py-3 text-left text-sm font-semibold text-gray-500 dark:text-gray-300">Empresa</th>
+                                <th className="px-4 py-3 text-left text-sm font-semibold text-gray-500 dark:text-gray-300">Data do Arquivamento</th>
+                                <th className="px-4 py-3 text-right text-sm font-semibold text-gray-500 dark:text-gray-300">Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200 dark:divide-white/10">
+                            {archivedLeads.map(lead => (
+                                <tr key={lead.id}>
+                                    <td className="px-4 py-3 font-medium text-gray-900 dark:text-white">{lead.name}</td>
+                                    <td className="px-4 py-3 text-gray-600 dark:text-gray-300">{lead.company || 'N/A'}</td>
+                                    <td className="px-4 py-3 text-gray-500 dark:text-gray-400">{formatDateTime(lead.archivedAt)}</td>
+                                    <td className="px-4 py-3 text-right">
+                                        <Button size="sm" onClick={() => onUnarchive(lead.id)}>Restaurar</Button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                ) : (
+                    <EmptyState title="Nenhum Lead Arquivado" message="Quando você mover um lead para a coluna de descarte, ele aparecerá aqui." />
+                )}
+            </div>
+             <div className="flex justify-end pt-6 mt-4 border-t border-gray-200 dark:border-white/10">
+                <Button variant="outline" onClick={onClose}>Fechar</Button>
+            </div>
+        </Modal>
+    )
+};
+
+const ManageColumnsModal = ({ isOpen, onClose, onSave, columns, boardId }) => {
+    const { addKanbanColumn, deleteKanbanColumn, updateKanbanColumnOrder, logAction } = useData();
+    const { toast } = useToast();
+    const db = getFirestore();
+
+    const [localColumns, setLocalColumns] = useState([]);
+    const [newColumnTitle, setNewColumnTitle] = useState("");
+
+    useEffect(() => {
+        // Inicializa o estado local com as colunas existentes
+        const initializedColumns = columns.map(col => ({
+            ...col,
+            isConversion: col.isConversion || false,
+            isArchiveColumn: col.isArchiveColumn || false,
+        }));
+        setLocalColumns(initializedColumns);
+    }, [columns, isOpen]);
+
+    const handleTitleChange = (id, newTitle) => {
+        setLocalColumns(prev => prev.map(col => col.id === id ? { ...col, title: newTitle } : col));
+    };
+
+    const handleSetConversion = (id) => {
+        setLocalColumns(prev => prev.map(col => ({ ...col, isConversion: col.id === id, isArchiveColumn: col.id === id ? false : col.isArchiveColumn })));
+    };
+
+    const handleSetArchive = (id) => {
+        setLocalColumns(prev => prev.map(col => ({ ...col, isArchiveColumn: col.id === id, isConversion: col.id === id ? false : col.isConversion })));
+    };
+
+    const handleAddNewColumn = () => {
+        if (newColumnTitle.trim() === "") return;
+        const newColumn = {
+            id: `temp_${Date.now()}`,
+            title: newColumnTitle,
+            color: '#3B82F6',
+            isConversion: false,
+            isArchiveColumn: false,
+            order: localColumns.length,
+            boardId: boardId,
+        };
+        setLocalColumns(prev => [...prev, newColumn]);
+        setNewColumnTitle("");
+    };
+
+    const handleDelete = async (id, title) => {
+       if (id.startsWith('temp_')) {
+            setLocalColumns(prev => prev.filter(col => col.id !== id));
+       } else {
+            const itemsInColumn = boardId === 'leads' ? 
+              (await getDocs(query(collection(db, 'leads'), where('status', '==', title)))).size :
+              (await getDocs(query(collection(db, 'tasks'), where('status', '==', title)))).size;
+
+            if (itemsInColumn > 0) {
+              toast({ title: "Coluna não está vazia!", description: "Mova os itens para outra coluna antes de excluir.", variant: 'destructive' });
+              return;
+            }
+            if (await deleteKanbanColumn(id)) {
+                setLocalColumns(prev => prev.filter(col => col.id !== id));
+                toast({ title: "Coluna removida" });
+            }
+       }
+    };
+    
+    const handleSave = () => {
+        onSave(localColumns);
+        onClose();
+    };
+
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title="Gerenciar Colunas do Funil">
+            <div className="space-y-4">
+                <p className="text-sm text-gray-500 dark:text-gray-400">Arraste para reordenar. Marque (⚡) para a coluna de conversão e (🗄️) para a de descarte.</p>
+                <div className="space-y-3 max-h-64 overflow-y-auto pr-2">
+                    {localColumns.map(col => (
+                        <div key={col.id} className="flex items-center gap-3 bg-gray-100 dark:bg-black/20 p-2 rounded-lg">
+                            <GripVerticalIcon className="h-5 w-5 text-gray-400 cursor-move" />
+                            <Input value={col.title} onChange={(e) => handleTitleChange(col.id, e.target.value)} className="flex-grow"/>
+                            <button
+                                onClick={() => handleSetConversion(col.id)}
+                                title="Marcar como coluna de CONVERSÃO"
+                                className={cn(
+                                    "p-2 rounded-full transition-colors",
+                                    col.isConversion ? "bg-green-500 text-white" : "bg-gray-300 dark:bg-gray-600 hover:bg-green-400"
+                                )}
+                            >
+                                <ZapIcon className={cn("h-4 w-4", col.isConversion && "text-white")} />
+                            </button>
+                            <button
+                                onClick={() => handleSetArchive(col.id)}
+                                title="Marcar como coluna de ARQUIVO/DESCARTE"
+                                className={cn(
+                                    "p-2 rounded-full transition-colors",
+                                    col.isArchiveColumn ? "bg-red-600 text-white" : "bg-gray-300 dark:bg-gray-600 hover:bg-red-500"
+                                )}
+                            >
+                                <ArchiveIcon className="h-4 w-4" />
+                            </button>
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500/70" onClick={() => handleDelete(col.id, col.title)}>
+                                <Trash2Icon className="h-4 w-4" />
+                            </Button>
+                        </div>
+                    ))}
+                </div>
+
+                <div className="border-t border-gray-200 dark:border-white/10 pt-4">
+                    <h3 className="text-md font-semibold text-gray-800 dark:text-gray-200">Adicionar Nova Coluna</h3>
+                    <div className="flex gap-3 mt-2">
+                         <Input value={newColumnTitle} onChange={(e) => setNewColumnTitle(e.target.value)} placeholder="Nome da nova coluna" />
+                         <Button onClick={handleAddNewColumn}>Adicionar</Button>
+                    </div>
+                </div>
+            </div>
+            <div className="flex justify-end gap-4 pt-6 mt-4 border-t border-gray-200 dark:border-white/10">
+                <Button variant="outline" onClick={onClose}>Cancelar</Button>
+                <Button variant="violet" onClick={handleSave}>Salvar Alterações</Button>
+            </div>
+        </Modal>
+    );
+};
+
 function LeadsPage({ onNavigate }) {
     const { leads, updateLead, addLead, leadColumns, addKanbanColumn, deleteKanbanColumn } = useData();
     const { toast } = useToast();
     const confirm = useConfirm();
+    const db = getFirestore();
     const [isLeadModalOpen, setLeadModalOpen] = useState(false);
-    const [isColumnModalOpen, setColumnModalOpen] = useState(false);
+    const [isManageColumnsModalOpen, setManageColumnsModalOpen] = useState(false);
+    const [isArchiveModalOpen, setArchiveModalOpen] = useState(false);
     const [editingLead, setEditingLead] = useState(null);
 
-    // Adicione esta verificação. Se as colunas não carregaram ainda, mostra "Carregando..."
     if (!leadColumns) {
         return <div className="p-8 text-center">Carregando colunas...</div>;
     }
@@ -1483,21 +2304,53 @@ function LeadsPage({ onNavigate }) {
         const targetColumn = leadColumns.find(c => c.id === targetColumnId);
         if (!targetColumn) return;
 
-        const newStatus = targetColumn.title;
-        if (newStatus === 'Ganhos') {
+        if (targetColumn.isConversion) {
             onNavigate('convert-lead', item.id);
-        } else if (newStatus === 'Perdidos') {
+        } else if (targetColumn.isArchiveColumn) {
             try {
-                await confirm({ title: `Marcar ${item.name} como perdido?`, description: "Deseja agendar um novo contato?" });
-                onNavigate('add-task-from-lead', item.id);
+                await confirm({ title: `Arquivar Lead?`, description: `"${item.name}" será removido do funil, mas poderá ser restaurado a qualquer momento.` });
+                await updateLead(item.id, { ...item, archived: true, status: targetColumn.title, archivedAt: serverTimestamp() });
+                toast({ title: "Lead Arquivado", description: `${item.name} foi movido para o arquivo.` });
             } catch (e) {
-                await updateLead(item.id, { ...item, status: newStatus });
-                toast({ title: "Lead Movido", description: `${item.name} movido para "Perdidos".` });
+                // Ação cancelada pelo usuário
             }
         } else {
+            const newStatus = targetColumn.title;
             await updateLead(item.id, { ...item, status: newStatus });
             toast({ title: "Lead Atualizado", description: `${item.name} movido para "${newStatus}".` });
         }
+    };
+    
+    const handleSaveColumns = async (updatedColumns) => {
+        const batch = writeBatch(db);
+        
+        updatedColumns.forEach((col, index) => {
+            const { id, ...data } = col;
+            const docRef = id.startsWith('temp_') 
+                ? doc(collection(db, 'kanban_columns'))
+                : doc(db, 'kanban_columns', id);
+            
+            batch.set(docRef, { ...data, order: index }, { merge: true });
+        });
+
+        try {
+            await batch.commit();
+            toast({ title: "Sucesso!", description: "Estrutura do funil foi salva." });
+        } catch (error) {
+            toast({ title: "Erro", description: "Não foi possível salvar as alterações.", variant: 'destructive' });
+            console.error("Erro ao salvar colunas: ", error);
+        }
+    };
+
+    const handleUnarchive = async (leadId) => {
+        const sortedColumns = [...leadColumns].sort((a, b) => a.order - b.order);
+        const firstColumn = sortedColumns[0];
+        if (!firstColumn) {
+            toast({ title: "Erro", description: "Nenhuma coluna de funil encontrada para restaurar o lead.", variant: 'destructive' });
+            return;
+        }
+        await updateLead(leadId, { archived: false, archivedAt: null, status: firstColumn.title });
+        toast({ title: "Lead Restaurado!", description: "O lead voltou para a primeira coluna do funil." });
     };
 
     const handleOpenLeadModal = (lead = null) => {
@@ -1510,53 +2363,26 @@ function LeadsPage({ onNavigate }) {
             await updateLead(leadData.id, leadData);
             toast({ title: "Lead Atualizado", description: `${leadData.name} foi atualizado.` });
         } else {
-            const firstColumn = leadColumns[0];
+            const firstColumn = leadColumns.sort((a,b) => a.order - b.order)[0];
             const status = firstColumn ? firstColumn.title : 'Novo';
-            await addLead({ ...leadData, status });
+            await addLead({ ...leadData, status, archived: false });
             toast({ title: "Lead Adicionado", description: `${leadData.name} foi adicionado.` });
         }
     };
 
-    const handleAddColumn = async (columnData) => {
-        const newColumn = {
-            ...columnData,
-            boardId: 'leads',
-            order: leadColumns.length
-        };
-        const success = await addKanbanColumn(newColumn);
-        if (success) {
-            toast({ title: "Coluna Adicionada!" });
-            setColumnModalOpen(false);
-        } else {
-            toast({ title: "Erro", variant: 'destructive' });
-        }
-    };
-
-    const handleDeleteColumn = async (columnId) => {
-        const itemsInColumn = leads.filter(l => l.status === leadColumns.find(c => c.id === columnId)?.title);
-        if (itemsInColumn.length > 0) {
-            toast({ title: "Coluna não está vazia!", description: "Mova os leads para outra coluna antes de excluir.", variant: 'destructive' });
-            return;
-        }
-        try {
-            await confirm({ title: "Excluir Coluna?", description: "Esta ação não pode ser desfeita." });
-            await deleteKanbanColumn(columnId);
-            toast({ title: "Coluna Excluída" });
-        } catch (e) {}
-    };
-
     const columnsForBoard = useMemo(() => {
-        if (!leadColumns) return {}; // Proteção extra
+        if (!leadColumns) return {};
+        const visibleLeads = leads.filter(lead => !lead.archived);
         return leadColumns.reduce((acc, column) => {
             acc[column.id] = {
                 ...column,
-                items: leads.filter(l => l.status === column.title)
+                items: visibleLeads.filter(l => l.status === column.title)
             };
             return acc;
         }, {});
     }, [leadColumns, leads]);
 
-    const KanbanBoard = ({ columns, onDragEnd, children, onDeleteColumn }) => {
+    const KanbanBoard = ({ columns, onDragEnd, children }) => {
         const [draggedItem, setDraggedItem] = useState(null);
         const [dragOverColumn, setDragOverColumn] = useState(null);
         const handleDragStart = (e, item, sourceColumnId) => { setDraggedItem({ item, sourceColumnId }); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', item.id); };
@@ -1564,16 +2390,19 @@ function LeadsPage({ onNavigate }) {
         const handleDrop = (e, targetColumnId) => { e.preventDefault(); if (draggedItem && draggedItem.sourceColumnId !== targetColumnId) { onDragEnd(draggedItem.item, targetColumnId); } setDraggedItem(null); setDragOverColumn(null); };
 
         return (<div className="flex gap-6 overflow-x-auto p-2">
-            {Object.entries(columns).map(([columnId, column]) => (
-                <div key={columnId} className={cn("w-80 flex-shrink-0 flex flex-col rounded-xl transition-colors duration-300", dragOverColumn === columnId ? 'bg-gray-200/50 dark:bg-white/10' : '')} onDragOver={(e) => handleDragOver(e, columnId)} onDrop={(e) => handleDrop(e, columnId)} onDragLeave={() => setDragOverColumn(null)}>
-                    <div className="p-4 flex justify-between items-center border-b-2" style={{ borderColor: column.color }}>
-                        <h3 className="font-semibold text-gray-900 dark:text-white">{column.title}</h3>
+            {Object.values(columns).sort((a,b) => a.order - b.order).map((column) => (
+                <div key={column.id} className={cn("w-80 flex-shrink-0 flex flex-col rounded-xl transition-colors duration-300", dragOverColumn === column.id ? 'bg-gray-200/50 dark:bg-white/10' : '')} onDragOver={(e) => handleDragOver(e, column.id)} onDrop={(e) => handleDrop(e, column.id)} onDragLeave={() => setDragOverColumn(null)}>
+                    <div className="p-4 flex justify-between items-center border-b-2" style={{ borderColor: column.isConversion ? '#10B981' : (column.isArchiveColumn ? '#EF4444' : (column.color || '#3B82F6')) }}>
+                        <h3 className="font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                            {column.title}
+                            {column.isConversion && <ZapIcon className="h-4 w-4 text-green-500" title="Coluna de Conversão"/>}
+                            {column.isArchiveColumn && <ArchiveIcon className="h-4 w-4 text-red-500" title="Coluna de Arquivo/Descarte"/>}
+                        </h3>
                         <div className="flex items-center gap-2">
                             <span className="text-sm font-bold text-gray-500 dark:text-gray-400 bg-gray-200 dark:bg-gray-800 rounded-full px-2 py-0.5">{column.items.length}</span>
-                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onDeleteColumn(column.id)}><Trash2Icon className="h-4 w-4"/></Button>
                         </div>
                     </div>
-                    <div className="p-2 space-y-3 overflow-y-auto min-h-[200px]">{column.items.length > 0 ? (column.items.map(item => (<div key={item.id} draggable onDragStart={(e) => handleDragStart(e, item, columnId)}>{typeof children === 'function' && children(item)}</div>))) : (<div className="text-center text-sm text-gray-500 dark:text-gray-600 p-4">Nenhum item aqui.</div>)}</div>
+                    <div className="p-2 space-y-3 overflow-y-auto min-h-[200px]">{column.items.length > 0 ? (column.items.map(item => (<div key={item.id} draggable onDragStart={(e) => handleDragStart(e, item, column.id)}>{typeof children === 'function' && children(item)}</div>))) : (<div className="text-center text-sm text-gray-500 dark:text-gray-600 p-4">Nenhum item aqui.</div>)}</div>
                 </div>
             ))}
         </div>);
@@ -1598,18 +2427,31 @@ function LeadsPage({ onNavigate }) {
         <div className="p-4 sm:p-6 lg:p-8">
             <div className="flex justify-between items-center mb-6">
                 <h2 className="text-3xl font-bold text-gray-900 dark:text-white">Funil de Leads</h2>
-                <div className="flex gap-2">
-                     <Button onClick={() => setColumnModalOpen(true)}><PaletteIcon className="h-4 w-4 mr-2"/>Gerenciar Colunas</Button>
+                <div className="flex flex-wrap gap-2">
+                     <Button onClick={() => setManageColumnsModalOpen(true)}><PaletteIcon className="h-4 w-4 mr-2"/>Gerenciar Colunas</Button>
+                     <Button variant="outline" onClick={() => setArchiveModalOpen(true)}><ArchiveIcon className="h-4 w-4 mr-2"/>Ver Arquivados</Button>
                      <Button onClick={() => handleOpenLeadModal()} variant="violet"><PlusCircleIcon className="h-5 w-5 mr-2" />Adicionar Lead</Button>
                 </div>
             </div>
             <GlassPanel className="p-4">
-                <KanbanBoard columns={columnsForBoard} onDragEnd={handleDragEnd} onDeleteColumn={handleDeleteColumn}>
+                <KanbanBoard columns={columnsForBoard} onDragEnd={handleDragEnd}>
                     {(item) => <LeadCard lead={item} onEdit={handleOpenLeadModal} />}
                 </KanbanBoard>
             </GlassPanel>
             <LeadModal isOpen={isLeadModalOpen} onClose={() => setLeadModalOpen(false)} onSave={handleSaveLead} lead={editingLead} />
-            <ColumnModal isOpen={isColumnModalOpen} onClose={() => setColumnModalOpen(false)} onSave={handleAddColumn} />
+            <ManageColumnsModal 
+                isOpen={isManageColumnsModalOpen} 
+                onClose={() => setManageColumnsModalOpen(false)} 
+                onSave={handleSaveColumns}
+                columns={leadColumns}
+                boardId="leads"
+            />
+            <ArchivedLeadsModal
+                isOpen={isArchiveModalOpen}
+                onClose={() => setArchiveModalOpen(false)}
+                allLeads={leads}
+                onUnarchive={handleUnarchive}
+            />
         </div>
     );
 }
@@ -1857,10 +2699,13 @@ function MainApp() {
     const [pageOptions, setPageOptions] = useState({});
     const [isSidebarOpen, setSidebarOpen] = useState(false);
     const [isCommandPaletteOpen, setCommandPaletteOpen] = useState(false);
-    const { getClientById, clients, leads, deleteLead, addTask } = useData();
+    const data = useData();
     const { toast } = useToast();
     const [itemDetails, setItemDetails] = useState(null);
     
+    // Central de controle dos Modais
+    const [taskModalState, setTaskModalState] = useState({ isOpen: false, task: null });
+
     const handleNavigate = (targetPage, itemId = null, options = {}) => {
         setPage(targetPage);
         setSelectedItemId(itemId);
@@ -1871,12 +2716,12 @@ function MainApp() {
     
     useEffect(() => {
         if ((page === 'client-details' || page === 'edit-client' || page === 'convert-lead') && selectedItemId) {
-            const item = (page === 'convert-lead') ? leads.find(l => l.id === selectedItemId) : getClientById(selectedItemId);
+            const item = (page === 'convert-lead') ? data.leads.find(l => l.id === selectedItemId) : data.getClientById(selectedItemId);
             setItemDetails(item);
         } else {
             setItemDetails(null);
         }
-    }, [selectedItemId, page, getClientById, clients, leads]);
+    }, [selectedItemId, page, data.getClientById, data.clients, data.leads]);
     
     useEffect(() => {
         const handleKeyDown = (e) => {
@@ -1891,9 +2736,9 @@ function MainApp() {
     
     const handleSaveClient = async (savedClient, leadIdToDelete = null) => {
         if (leadIdToDelete) {
-            const lead = leads.find(l => l.id === leadIdToDelete);
+            const lead = data.leads.find(l => l.id === leadIdToDelete);
             if (lead) {
-                await deleteLead(leadIdToDelete, lead.name);
+                await data.deleteLead(leadIdToDelete, lead.name);
                 toast({ title: "Lead Convertido!", description: `${lead.name} agora é um cliente.` });
             }
         }
@@ -1902,59 +2747,348 @@ function MainApp() {
         toast({ title: "Sucesso", description: `Cliente ${savedClient.general.holderName} salvo.` });
     };
     
-    const handleSaveTaskFromLead = async (taskData) => {
-        await addTask(taskData);
-        toast({ title: "Follow-up Agendado", description: `Nova tarefa criada.` });
-        handleNavigate('tasks');
+    const handleSaveTask = async (taskData) => {
+        const result = await data.addTask(taskData);
+        if(result) {
+            toast({ title: "Tarefa Criada!", description: `A tarefa "${taskData.title}" foi adicionada.`});
+            setTaskModalState({ isOpen: false, task: null });
+        } else {
+            toast({ title: "Erro", description: "Não foi possível criar a tarefa.", variant: 'destructive'});
+        }
     };
-    
-   const renderContent = () => {
-    const leadForTask = leads.find(l => l.id === selectedItemId);
-    switch (page) {
-        case 'dashboard': return <DashboardPage onNavigate={handleNavigate} />;
-        case 'leads': return <LeadsPage onNavigate={handleNavigate} />;
-        case 'clients': return <ClientsList onClientSelect={(id) => handleNavigate('client-details', id)} onAddClient={() => handleNavigate('add-client')} />;
-        case 'client-details': return <ClientDetails client={itemDetails} onBack={() => handleNavigate('clients')} onEdit={(client, options) => handleNavigate('edit-client', client.id, options)} />;
-        case 'add-client': return <ClientForm onSave={handleSaveClient} onCancel={() => handleNavigate('clients')} />;
-        case 'edit-client': return <ClientForm client={itemDetails} onSave={handleSaveClient} onCancel={() => handleNavigate('client-details', itemDetails.id)} initialTab={pageOptions.initialTab} />;
-        case 'convert-lead': return <ClientForm isConversion={true} leadData={itemDetails} onSave={handleSaveClient} onCancel={() => handleNavigate('leads')} />;
-        case 'add-task-from-lead': return <TaskModal isOpen={true} onClose={() => handleNavigate('leads')} onSave={handleSaveTaskFromLead} task={{ title: `Follow-up: ${leadForTask?.name}`, linkedToId: leadForTask?.id, linkedToType: 'lead' }} />;
-        case 'commissions': return <CommissionsPage />; // ADICIONE ESTA LINHA
-        case 'tasks': return <TasksPage />;
-        case 'calendar': return <CalendarPage onNavigate={handleNavigate} />;
-        case 'timeline': return <TimelinePage />;
-        case 'corporate': return <CorporatePage />;
-        case 'profile': return <ProfilePage />;
-        default: return <DashboardPage onNavigate={handleNavigate} />;
-    }
-};
-    
-    const CommandPalette = ({ isOpen, setIsOpen, onNavigate }) => { const { clients, leads } = useData(); const [searchTerm, setSearchTerm] = useState(''); const [activeIndex, setActiveIndex] = useState(0); const inputRef = useRef(null); const actions = useMemo(() => [ { id: 'nav-dashboard', name: 'Ir para Painel de Controle', type: 'Ação', action: () => onNavigate('dashboard') }, { id: 'nav-leads', name: 'Ir para Leads', type: 'Ação', action: () => onNavigate('leads') }, { id: 'nav-clients', name: 'Ir para Clientes', type: 'Ação', action: () => onNavigate('clients') }, { id: 'nav-tasks', name: 'Ir para Tarefas', type: 'Ação', action: () => onNavigate('tasks') }, { id: 'nav-calendar', name: 'Ir para Calendário', type: 'Ação', action: () => onNavigate('calendar') }, { id: 'nav-timeline', name: 'Ir para Time-Line', type: 'Ação', action: () => onNavigate('timeline') }, { id: 'nav-corporate', name: 'Ir para Corporativo', type: 'Ação', action: () => onNavigate('corporate') }, { id: 'nav-profile', name: 'Ir para Meu Perfil', type: 'Ação', action: () => onNavigate('profile') }, ...clients.map(c => ({ id: c.id, name: c.general.holderName || c.general.companyName, type: 'Cliente', action: () => onNavigate('client-details', c.id) })), ...leads.map(l => ({ id: l.id, name: l.name, type: 'Lead', action: () => onNavigate('leads') })) ], [clients, leads, onNavigate]); const results = useMemo(() => searchTerm ? actions.filter(a => a.name.toLowerCase().includes(searchTerm.toLowerCase())) : actions.slice(0, 8), [searchTerm, actions]); useEffect(() => { if (isOpen) { inputRef.current?.focus(); setActiveIndex(0); } }, [isOpen]); useEffect(() => { const handleKeyDown = (e) => { if (!isOpen) return; if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIndex(prev => (prev + 1) % (results.length || 1)); } else if (e.key === 'ArrowUp') { e.preventDefault(); setActiveIndex(prev => (prev - 1 + (results.length || 1)) % (results.length || 1)); } else if (e.key === 'Enter') { e.preventDefault(); if (results[activeIndex]) { results[activeIndex].action(); setIsOpen(false); setSearchTerm(''); } } else if (e.key === 'Escape') { setIsOpen(false); } }; window.addEventListener('keydown', handleKeyDown); return () => window.removeEventListener('keydown', handleKeyDown); }, [isOpen, results, activeIndex, setIsOpen]); if (!isOpen) return null; return createPortal(<div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 dark:bg-black/80 animate-fade-in pt-24" onClick={() => setIsOpen(false)}><GlassPanel className="w-full max-w-2xl flex flex-col" onClick={e => e.stopPropagation()}><div className="flex items-center gap-4 p-4 border-b border-gray-200 dark:border-white/10"><SearchIcon className="h-5 w-5 text-gray-500 dark:text-gray-400"/><input ref={inputRef} type="text" placeholder="Buscar clientes, leads ou navegar..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full bg-transparent text-gray-900 dark:text-white placeholder:text-gray-500 focus:outline-none"/></div><div className="p-2 max-h-[400px] overflow-y-auto">{results.length > 0 ? (results.map((item, index) => (<div key={item.id} onClick={() => { item.action(); setIsOpen(false); setSearchTerm(''); }} className={cn("flex justify-between items-center p-3 rounded-lg cursor-pointer", index === activeIndex ? "bg-violet-500/20 dark:bg-violet-500/30" : "hover:bg-gray-100 dark:hover:bg-white/10")}><span className="text-gray-900 dark:text-white">{item.name}</span><span className="text-xs text-gray-600 dark:text-gray-400 bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded-md">{item.type}</span></div>))) : (<p className="p-4 text-center text-gray-500">Nenhum resultado.</p>)}</div></GlassPanel></div>, document.body); }
-    const Sidebar = ({ onNavigate, currentPage, isSidebarOpen }) => { const { logout } = useAuth(); const navItems = [
-    { id: 'dashboard', label: 'Painel de Controle', icon: HomeIcon },
-    { id: 'leads', label: 'Leads', icon: TargetIcon },
-    { id: 'clients', label: 'Clientes', icon: UsersIcon },
-    { id: 'commissions', label: 'Comissões', icon: PercentIcon }, // NOVA LINHA
-    { id: 'tasks', label: 'Minhas Tarefas', icon: CheckSquareIcon },
-    { id: 'calendar', label: 'Calendário', icon: CalendarIcon },
-    { id: 'timeline', label: 'Time-Line', icon: HistoryIcon },
-    { id: 'corporate', label: 'Corporativo', icon: BuildingIcon }
-    ];; return (<aside className={cn("fixed top-0 left-0 z-40 w-64 h-full transition-transform lg:translate-x-0", isSidebarOpen ? "translate-x-0" : "-translate-x-full")}><div className="h-full flex flex-col bg-white/80 dark:bg-[#0D1117]/80 backdrop-blur-2xl border-r border-gray-200 dark:border-white/10"><div className="flex items-center justify-center h-20 flex-shrink-0"><h2 className="text-2xl font-bold text-gray-900 dark:text-white tracking-wider">OLYMPUS X</h2></div><nav className="flex-grow mt-6 px-4 space-y-2">{navItems.map(item => (<button key={item.id} onClick={() => onNavigate(item.id)} className={cn("w-full flex items-center p-3 rounded-lg transition-all duration-300 font-semibold", currentPage.startsWith(item.id) ? "bg-violet-100 dark:bg-violet-500/20 text-violet-600 dark:text-violet-300" : "text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-white")}><item.icon className="h-5 w-5 mr-3" /><span>{item.label}</span></button>))}</nav><div className="p-4 border-t border-gray-200 dark:border-white/10 mt-auto flex-shrink-0"><button onClick={() => onNavigate('profile')} className="w-full flex items-center p-3 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-white mb-2"><UserCircleIcon className="h-5 w-5 mr-3" /><span>Meu Perfil</span></button><button onClick={logout} className="w-full flex items-center p-3 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-red-500/10 hover:text-red-500 dark:hover:text-red-400"><LogOutIcon className="h-5 w-5 mr-3" /><span>Sair</span></button></div></div></aside>); }
-    const Header = ({ onToggleSidebar, onOpenCommandPalette }) => { const { user } = useAuth(); const { theme, toggleTheme } = useTheme(); const { clients } = useData(); const expiringContracts = useMemo(() => { const today = new Date(); const thirtyDaysFromNow = new Date(); thirtyDaysFromNow.setDate(today.getDate() + 30); return clients.filter(client => (client.contracts || []).some(contract => { if (!contract.dataFimContrato) return false; const endDate = new Date(contract.dataFimContrato); return endDate >= today && endDate <= thirtyDaysFromNow; })).length; }, [clients]); return (<header className="sticky top-0 z-30 h-20"><div className="absolute inset-0 bg-gradient-to-b from-gray-50 dark:from-[#0D1117] to-transparent pointer-events-none"></div><div className="relative flex items-center justify-between h-full px-6"><button onClick={onToggleSidebar} className="lg:hidden p-2 -ml-2 text-gray-600 dark:text-gray-300"><svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" /></svg></button><div className="hidden lg:block"><Button variant="ghost" onClick={onOpenCommandPalette} className="text-gray-500 dark:text-gray-400"><SearchIcon className="h-5 w-5 mr-2" />Busca Global...<span className="ml-4 text-xs border border-gray-400 dark:border-gray-600 rounded-md px-1.5 py-0.5">Ctrl K</span></Button></div><div className="flex items-center gap-4"><Button variant="ghost" size="icon" onClick={toggleTheme} title="Alterar Tema">{theme === 'dark' ? <SunIcon className="h-6 w-6 text-yellow-400" /> : <MoonIcon className="h-6 w-6 text-gray-600" />}</Button><div className="relative"><Button variant="ghost" size="icon"><BellIcon className="h-6 w-6" /></Button>{expiringContracts > 0 && <span className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-violet-500 text-white text-[10px] ring-2 ring-white dark:ring-[#0D1117]">{expiringContracts}</span>}</div><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-full bg-cyan-100 dark:bg-cyan-900 flex items-center justify-center font-bold text-cyan-700 dark:text-cyan-300 border-2 border-cyan-300 dark:border-cyan-700">{user?.name?.[0]}</div><div className="text-right hidden sm:block"><p className="font-semibold text-sm text-gray-900 dark:text-white">{user?.name}</p><p className="text-xs text-gray-500 dark:text-gray-400">{user?.permissionLevel}</p></div></div></div></div></header>); }
+
+    // O NOVO MOTOR DE EXECUÇÃO
+    const executeCortexPlan = async (plan) => {
+        for (const step of plan) {
+            const { action, payload } = step;
+            switch(action) {
+                case 'navigate':
+                    handleNavigate(payload.page);
+                    break;
+                case 'create_task':
+                    setTaskModalState({
+                        isOpen: true,
+                        task: { 
+                            title: payload.title || '',
+                            description: payload.description || '',
+                            dueDate: payload.dueDate || '',
+                            assignedTo: payload.assignedTo || '', // Agora recebe o ID diretamente
+                            priority: 'Média',
+                            status: 'Pendente'
+                        }
+                    });
+                    break;
+                // ... outros cases como 'update_lead_status', 'add_note'
+                default:
+                    toast({ title: "Ação não reconhecida", description: `Córtex sugeriu: ${action}`, variant: 'destructive' });
+            }
+        }
+    };
+
+    const renderContent = () => {
+        // Lógica antiga de 'add-task-from-lead' foi simplificada e agora é controlada pelo Córtex
+        switch (page) {
+            case 'dashboard': return <DashboardPage onNavigate={handleNavigate} />;
+            case 'leads': return <LeadsPage onNavigate={handleNavigate} />;
+            case 'clients': return <ClientsList onClientSelect={(id) => handleNavigate('client-details', id)} onAddClient={() => handleNavigate('add-client')} />;
+            case 'client-details': return <ClientDetails client={itemDetails} onBack={() => handleNavigate('clients')} onEdit={(client, options) => handleNavigate('edit-client', client.id, options)} />;
+            case 'add-client': return <ClientForm onSave={handleSaveClient} onCancel={() => handleNavigate('clients')} />;
+            case 'edit-client': return <ClientForm client={itemDetails} onSave={handleSaveClient} onCancel={() => handleNavigate('client-details', itemDetails.id)} initialTab={pageOptions.initialTab} />;
+            case 'convert-lead': return <ClientForm isConversion={true} leadData={itemDetails} onSave={handleSaveClient} onCancel={() => handleNavigate('leads')} />;
+            case 'commissions': return <CommissionsPage />;
+            case 'tasks': return <TasksPage />;
+            case 'calendar': return <CalendarPage onNavigate={handleNavigate} />;
+            case 'timeline': return <TimelinePage />;
+            case 'corporate': return <CorporatePage />;
+            case 'profile': return <ProfilePage />;
+            default: return <DashboardPage onNavigate={handleNavigate} />;
+        }
+    };
     
     return (
         <div className="min-h-screen bg-gray-50 dark:bg-[#0D1117] text-gray-800 dark:text-gray-200 font-sans">
-            <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap'); body { font-family: 'Inter', sans-serif; } .prose { color: #374151; } .prose-invert { color: #d1d5db; } .dark .prose ul { list-style-type: disc; padding-left: 1.5rem; } .dark .prose li { margin-top: 0.25em; margin-bottom: 0.25em; } .cortex-active { border: 1px solid rgba(192, 38, 211, 0.5); box-shadow: 0 0 15px rgba(192, 38, 211, 0.3); animation: pulse-violet 2.5s infinite; } @keyframes pulse-violet { 0% { box-shadow: 0 0 10px rgba(192, 38, 211, 0.2); } 50% { box-shadow: 0 0 25px rgba(192, 38, 211, 0.5); } 100% { box-shadow: 0 0 10px rgba(192, 38, 211, 0.2); } } ::-webkit-scrollbar { width: 8px; height: 8px; } ::-webkit-scrollbar-track { background: #f1f5f9; } .dark ::-webkit-scrollbar-track { background: #0D1117; } ::-webkit-scrollbar-thumb { background: #a855f7; border-radius: 4px; } .dark ::-webkit-scrollbar-thumb { background: #C026D3; } ::-webkit-scrollbar-thumb:hover { background: #9333ea; } .dark ::-webkit-scrollbar-thumb:hover { background: #a31db1; } select option { background: white !important; color: #1f2937 !important; } .dark select option { background: #161b22 !important; color: #e5e7eb !important; }`}</style>
+            <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap'); body { font-family: 'Inter', sans-serif; } .prose { color: #374151; } .dark .prose-invert { color: #d1d5db; } .dark .prose ul { list-style-type: disc; padding-left: 1.5rem; } .dark .prose li { margin-top: 0.25em; margin-bottom: 0.25em; } .cortex-active { border: 1px solid rgba(192, 38, 211, 0.5); box-shadow: 0 0 15px rgba(192, 38, 211, 0.3); animation: pulse-violet 2.5s infinite; } @keyframes pulse-violet { 0% { box-shadow: 0 0 10px rgba(192, 38, 211, 0.2); } 50% { box-shadow: 0 0 25px rgba(192, 38, 211, 0.5); } 100% { box-shadow: 0 0 10px rgba(192, 38, 211, 0.2); } } ::-webkit-scrollbar { width: 8px; height: 8px; } ::-webkit-scrollbar-track { background: #f1f5f9; } .dark ::-webkit-scrollbar-track { background: #0D1117; } ::-webkit-scrollbar-thumb { background: #a855f7; border-radius: 4px; } .dark ::-webkit-scrollbar-thumb { background: #C026D3; } ::-webkit-scrollbar-thumb:hover { background: #9333ea; } .dark ::-webkit-scrollbar-thumb:hover { background: #a31db1; } select option { background: white !important; color: #1f2937 !important; } .dark select option { background: #161b22 !important; color: #e5e7eb !important; }`}</style>
             <BoletoTaskManager />
-            <CommandPalette isOpen={isCommandPaletteOpen} setIsOpen={setCommandPaletteOpen} onNavigate={handleNavigate} />
+            <CortexCommand 
+                isOpen={isCommandPaletteOpen} 
+                setIsOpen={setCommandPaletteOpen} 
+                onNavigate={handleNavigate}
+                onExecutePlan={executeCortexPlan}
+            />
             <Sidebar onNavigate={handleNavigate} currentPage={page} isSidebarOpen={isSidebarOpen} />
             <div className="lg:pl-64 transition-all duration-300">
                 <Header onToggleSidebar={() => setSidebarOpen(!isSidebarOpen)} onOpenCommandPalette={() => setCommandPaletteOpen(true)} />
                 <main className="relative">{renderContent()}</main>
             </div>
             {isSidebarOpen && <div onClick={() => setSidebarOpen(false)} className="fixed inset-0 bg-black/60 z-30 lg:hidden"></div>}
+            
+            <TaskModal 
+                isOpen={taskModalState.isOpen} 
+                onClose={() => setTaskModalState({ isOpen: false, task: null })} 
+                onSave={handleSaveTask} 
+                task={taskModalState.task} 
+            />
         </div>
     );
+}
+    
+    const CortexCommand = ({ isOpen, setIsOpen, onNavigate, onExecutePlan }) => {
+    const { user } = useAuth();
+    const { clients, leads, tasks, users, updateTask } = useData();
+    const { toast } = useToast();
+    const [view, setView] = useState('home'); // 'home', 'briefing', 'conversation'
+    const [searchTerm, setSearchTerm] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [conversation, setConversation] = useState([]);
+    const [planToConfirm, setPlanToConfirm] = useState(null);
+    const [clarification, setClarification] = useState(null); // Estado para clarificação
+    const inputRef = useRef(null);
+
+    const dailyGoals = useMemo(() => {
+        if (!tasks) return { total: 0, completed: 0, progress: 0 };
+        const todayKey = new Date().toISOString().split('T')[0];
+        const todayTasks = tasks.filter(t => t.dueDate === todayKey);
+        const completedToday = todayTasks.filter(t => t.status === 'Concluída').length;
+        return {
+            total: todayTasks.length,
+            completed: completedToday,
+            progress: todayTasks.length > 0 ? (completedToday / todayTasks.length) * 100 : 0
+        };
+    }, [tasks]);
+
+    const briefingData = useMemo(() => {
+        if (!tasks || !leads) return { tasks: [], leads: [] };
+        const todayKey = new Date().toISOString().split('T')[0];
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(new Date().getDate() - 7);
+        
+        return {
+            tasks: tasks.filter(t => t.dueDate === todayKey && t.status !== 'Concluída').slice(0, 3),
+            leads: leads.filter(l => l.status !== 'Ganhos' && l.status !== 'Perdidos' && l.lastActivityDate?.toDate() < sevenDaysAgo).slice(0, 2)
+        }
+    }, [tasks, leads]);
+
+    const handleReset = () => {
+        setView('home');
+        setSearchTerm('');
+        setConversation([]);
+        setPlanToConfirm(null);
+        setClarification(null);
+        setTimeout(() => inputRef.current?.focus(), 50);
+    };
+    
+    const handleCommandSubmit = async (commandText) => {
+        if (!commandText.trim()) return;
+        
+        if (commandText.toLowerCase().includes('briefing')) {
+            setView('briefing');
+            setSearchTerm('');
+            return;
+        }
+
+        setIsLoading(true);
+        setConversation([{ type: 'user', text: commandText }]);
+        setView('conversation');
+        setSearchTerm('');
+
+        const today = new Date();
+        const futureDate = new Date();
+        futureDate.setDate(today.getDate() + 4);
+
+        let finalPrompt = PARSE_COMMAND_PROMPT_TEMPLATE
+            .replace('{today}', today.toISOString().split('T')[0])
+            .replace('{today_plus_4_days}', futureDate.toISOString().split('T')[0])
+            .replace('{users}', JSON.stringify(users.map(u => ({ id: u.id, name: u.name }))))
+            .replace('{clients}', JSON.stringify(clients.map(c => ({ id: c.id, name: c.general.companyName || c.general.holderName }))))
+            .replace('{leads}', JSON.stringify(leads.map(l => ({ id: l.id, name: l.name }))))
+            .replace('{command}', commandText);
+        
+        const response = await Cortex.parseCommand(finalPrompt);
+
+        if (response.plan) {
+            const planAction = response.plan[0];
+            if (planAction.action === 'clarify_task_details') {
+                setClarification(planAction.payload);
+            } else {
+                setPlanToConfirm(response.plan);
+            }
+        } else {
+             setConversation(prev => [...prev, { type: 'ai', error: true, text: response.error || "Não entendi o comando. Tente de outra forma." }]);
+        }
+        
+        setIsLoading(false);
+    };
+
+    const handleClarificationChoice = (chosenOption) => {
+        const originalPayload = clarification;
+        const newCommand = `criar tarefa ${originalPayload.title}, prazo ${originalPayload.dueDate}, responsável ${chosenOption.name}`;
+        setClarification(null);
+        handleCommandSubmit(newCommand);
+    };
+
+    const confirmExecution = () => {
+        const plan = planToConfirm.map(step => {
+            if (step.action === 'create_task' && step.payload.assignedToName) {
+                const responsibleUser = users.find(u => u.name === step.payload.assignedToName);
+                return { ...step, payload: { ...step.payload, assignedTo: responsibleUser?.id || '' } };
+            }
+            return step;
+        });
+        onExecutePlan(plan);
+        setIsOpen(false);
+    };
+
+    useEffect(() => { if (isOpen) handleReset(); }, [isOpen]);
+    useEffect(() => {
+        const handleKeyDown = (e) => { if (e.key === 'Escape') setIsOpen(false); };
+        if (isOpen) window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [isOpen]);
+    
+    const GamificationHeader = () => (
+        <div className="p-4 bg-gray-100 dark:bg-white/5 rounded-lg mb-4">
+            <p className="text-sm font-semibold text-gray-700 dark:text-gray-300">Progresso Diário</p>
+            <div className="flex items-center gap-3 mt-2"><div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5"><div className="bg-green-500 h-2.5 rounded-full" style={{ width: `${dailyGoals.progress}%` }}></div></div><span className="font-bold text-sm text-gray-800 dark:text-white">{dailyGoals.completed}/{dailyGoals.total}</span></div>
+        </div>
+    );
+
+    const BriefingView = () => (
+        <div className="animate-fade-in space-y-4">
+            <div>
+                <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-2">Tarefas para Hoje</h4>
+                {briefingData.tasks.length > 0 ? briefingData.tasks.map(task => (
+                    <div key={task.id} className="flex items-center justify-between p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-white/10">
+                        <span className="text-sm">{task.title}</span><Button size="sm" onClick={() => { updateTask(task.id, { ...task, status: 'Concluída' }); toast({ title: "Tarefa Concluída!" }) }}>Concluir</Button>
+                    </div>
+                )) : <p className="text-sm text-gray-500 p-2">Nenhuma tarefa pendente para hoje. 🎉</p>}
+            </div>
+            <div>
+                <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-2">Leads Precisando de Atenção</h4>
+                {briefingData.leads.length > 0 ? briefingData.leads.map(lead => (
+                    <div key={lead.id} className="flex items-center justify-between p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-white/10">
+                        <span className="text-sm">{lead.name}</span><Button size="sm" onClick={() => onExecutePlan([{ action: 'create_task', payload: { title: `Follow-up com ${lead.name}`, linkedToName: lead.name, linkedToType: 'lead' } }])}>Criar Tarefa</Button>
+                    </div>
+                )) : <p className="text-sm text-gray-500 p-2">Todos os seus leads estão em dia!</p>}
+            </div>
+        </div>
+    );
+    
+    if (!isOpen) return null;
+    return createPortal(
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 dark:bg-black/80 animate-fade-in pt-24" onClick={() => setIsOpen(false)}>
+            <GlassPanel className="w-full max-w-2xl flex flex-col" onClick={e => e.stopPropagation()}>
+                <div className="p-4 flex items-center gap-3 border-b border-gray-200 dark:border-white/10">
+                    <SparklesIcon className="h-6 w-6 text-violet-500 flex-shrink-0" />
+                    <form onSubmit={(e) => { e.preventDefault(); handleCommandSubmit(searchTerm); }} className="w-full">
+                        <input ref={inputRef} type="text" placeholder="Peça algo ou digite 'meu briefing'..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="w-full bg-transparent text-lg text-gray-900 dark:text-white placeholder:text-gray-500 focus:outline-none" disabled={isLoading} />
+                    </form>
+                    {view !== 'home' && <Button variant="ghost" size="sm" onClick={handleReset}>Voltar</Button>}
+                </div>
+
+                <div className="p-4 max-h-[450px] overflow-y-auto">
+                    {view === 'home' && (<div className="animate-fade-in"><GamificationHeader /><Button variant="outline" className="w-full" onClick={() => { setView('briefing'); }}><ZapIcon className="h-5 w-5 mr-2" />Ver meu Briefing Diário</Button></div>)}
+                    {view === 'briefing' && <BriefingView />}
+                    {view === 'conversation' && (
+                        <div className="space-y-4">
+                            {conversation.map((msg, i) => (<div key={i} className="flex items-start gap-3"><div className="w-8 h-8 rounded-full bg-cyan-100 dark:bg-cyan-900 flex items-center justify-center font-bold text-cyan-700 dark:text-cyan-300 border-2 border-cyan-300 dark:border-cyan-700 flex-shrink-0">{user?.name?.[0]}</div><div className={cn("p-3 rounded-lg rounded-tl-none", msg.error ? "bg-red-100 dark:bg-red-500/20" : "bg-gray-100 dark:bg-white/5")}><p className={cn(msg.error ? "text-red-800 dark:text-red-200" : "text-gray-800 dark:text-gray-200")}>{msg.text}</p></div></div>))}
+                            {isLoading && (<div className="flex items-center gap-3 animate-fade-in"><div className="w-8 h-8 rounded-full bg-violet-100 dark:bg-violet-900 flex items-center justify-center flex-shrink-0"><SparklesIcon className="h-5 w-5 text-violet-500 animate-pulse" /></div><p className="text-sm text-gray-500 italic">Córtex está preparando seu plano...</p></div>)}
+                            
+                            {clarification && (
+                                <div className="flex items-start gap-3 animate-fade-in">
+                                    <div className="w-8 h-8 rounded-full bg-violet-100 dark:bg-violet-900 flex items-center justify-center flex-shrink-0"><SparklesIcon className="h-5 w-5 text-violet-500" /></div>
+                                    <div className="bg-gray-100 dark:bg-white/5 p-3 rounded-lg rounded-tl-none w-full">
+                                        <p className="font-semibold mb-3 text-gray-800 dark:text-gray-200">Encontrei mais de uma pessoa com esse nome. Para quem devo atribuir a tarefa?</p>
+                                        <div className="flex flex-col gap-2 mt-2">
+                                            {clarification.options.map(opt => <Button key={opt.id} variant="outline" onClick={() => handleClarificationChoice(opt)}> {opt.name} </Button>)}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {planToConfirm && (
+                                <div className="flex items-start gap-3 animate-fade-in">
+                                    <div className="w-8 h-8 rounded-full bg-violet-100 dark:bg-violet-900 flex items-center justify-center flex-shrink-0"><SparklesIcon className="h-5 w-5 text-violet-500" /></div>
+                                    <div className="bg-gray-100 dark:bg-white/5 p-3 rounded-lg rounded-tl-none w-full">
+                                        <p className="font-semibold mb-3 text-gray-800 dark:text-gray-200">Certo, preparei o rascunho. Confirme os detalhes:</p>
+                                        <div className="space-y-3 bg-white dark:bg-black/20 p-3 rounded-md">
+                                            <div><Label>Título</Label><Input value={planToConfirm[0].payload.title} onChange={(e) => setPlanToConfirm([{ ...planToConfirm[0], payload: { ...planToConfirm[0].payload, title: e.target.value } }])} /></div>
+                                            <div className="grid grid-cols-2 gap-3">
+                                                <div><Label>Prazo</Label><DateField value={planToConfirm[0].payload.dueDate} onChange={(e) => setPlanToConfirm([{ ...planToConfirm[0], payload: { ...planToConfirm[0].payload, dueDate: e.target.value } }])} /></div>
+                                                <div><Label>Responsável</Label><Select value={users.find(u => u.name === planToConfirm[0].payload.assignedToName)?.id || ''} onChange={(e) => setPlanToConfirm([{ ...planToConfirm[0], payload: { ...planToConfirm[0].payload, assignedToName: users.find(u => u.id === e.target.value)?.name } }])}><option>Selecione</option>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></div>
+                                            </div>
+                                        </div>
+                                        <div className="flex justify-end gap-2 mt-4"><Button variant="outline" onClick={handleReset}>Cancelar</Button><Button variant="violet" onClick={confirmExecution}>Confirmar e Criar Tarefa</Button></div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            </GlassPanel>
+        </div>,
+        document.body
+    );
+};
+    const Sidebar = ({ onNavigate, currentPage, isSidebarOpen }) => { const { logout } = useAuth(); const navItems = [
+    { id: 'dashboard', label: 'Painel de Controle', icon: HomeIcon },
+    { id: 'leads', label: 'Leads', icon: TargetIcon },
+    { id: 'clients', label: 'Clientes', icon: UsersIcon },
+    { id: 'commissions', label: 'Comissões', icon: PercentIcon },
+    { id: 'tasks', label: 'Minhas Tarefas', icon: CheckSquareIcon },
+    { id: 'calendar', label: 'Calendário', icon: CalendarIcon },
+    { id: 'timeline', label: 'Time-Line', icon: HistoryIcon },
+    { id: 'corporate', label: 'Corporativo', icon: BuildingIcon }
+    ];; return (<aside className={cn("fixed top-0 left-0 z-40 w-64 h-full transition-transform lg:translate-x-0", isSidebarOpen ? "translate-x-0" : "-translate-x-full")}><div className="h-full flex flex-col bg-white/80 dark:bg-[#0D1117]/80 backdrop-blur-2xl border-r border-gray-200 dark:border-white/10"><div className="flex items-center justify-center h-20 flex-shrink-0"><h2 className="text-2xl font-bold text-gray-900 dark:text-white tracking-wider">OLYMPUS X</h2></div><nav className="flex-grow mt-6 px-4 space-y-2">{navItems.map(item => (<button key={item.id} onClick={() => onNavigate(item.id)} className={cn("w-full flex items-center p-3 rounded-lg transition-all duration-300 font-semibold", currentPage.startsWith(item.id) ? "bg-violet-100 dark:bg-violet-500/20 text-violet-600 dark:text-violet-300" : "text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-white")}><item.icon className="h-5 w-5 mr-3" /><span>{item.label}</span></button>))}</nav><div className="p-4 border-t border-gray-200 dark:border-white/10 mt-auto flex-shrink-0"><button onClick={() => onNavigate('profile')} className="w-full flex items-center p-3 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5 hover:text-gray-900 dark:hover:text-white mb-2"><UserCircleIcon className="h-5 w-5 mr-3" /><span>Meu Perfil</span></button><button onClick={logout} className="w-full flex items-center p-3 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-red-500/10 hover:text-red-500 dark:hover:text-red-400"><LogOutIcon className="h-5 w-5 mr-3" /><span>Sair</span></button></div></div></aside>); }
+    const Header = ({ onToggleSidebar, onOpenCommandPalette }) => { 
+    const { user } = useAuth(); 
+    const { theme, toggleTheme } = useTheme(); 
+    const { clients } = useData(); 
+    const expiringContracts = useMemo(() => { 
+        const today = new Date(); 
+        const thirtyDaysFromNow = new Date(); 
+        thirtyDaysFromNow.setDate(today.getDate() + 30); 
+        return clients.filter(client => (client.contracts || []).some(contract => { 
+            if (!contract.renewalDate) return false; 
+            const endDate = new Date(contract.renewalDate + 'T00:00:00'); 
+            return endDate >= today && endDate <= thirtyDaysFromNow; 
+        })).length; 
+    }, [clients]); 
+
+    return (
+        <header className="sticky top-0 z-30 h-20">
+            <div className="absolute inset-0 bg-gradient-to-b from-gray-50 dark:from-[#0D1117] to-transparent pointer-events-none"></div>
+            <div className="relative flex items-center justify-between h-full px-6">
+                <button onClick={onToggleSidebar} className="lg:hidden p-2 -ml-2 text-gray-600 dark:text-gray-300">
+                    <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
+                </button>
+                <div className="hidden lg:block">
+                    <Button variant="ghost" onClick={onOpenCommandPalette} className="text-gray-500 dark:text-gray-400">
+                        <SparklesIcon className="h-5 w-5 mr-2 text-violet-500"/>
+                        Assistente Córtex...
+                        <span className="ml-4 text-xs border border-gray-400 dark:border-gray-600 rounded-md px-1.5 py-0.5">Ctrl K</span>
+                    </Button>
+                </div>
+                <div className="flex items-center gap-4">
+                    <Button variant="ghost" size="icon" onClick={toggleTheme} title="Alterar Tema">
+                        {theme === 'dark' ? <SunIcon className="h-6 w-6 text-yellow-400" /> : <MoonIcon className="h-6 w-6 text-gray-600" />}
+                    </Button>
+                    <div className="relative">
+                        <Button variant="ghost" size="icon"><BellIcon className="h-6 w-6" /></Button>
+                        {expiringContracts > 0 && <span className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-violet-500 text-white text-[10px] ring-2 ring-white dark:ring-[#0D1117]">{expiringContracts}</span>}
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-full bg-cyan-100 dark:bg-cyan-900 flex items-center justify-center font-bold text-cyan-700 dark:text-cyan-300 border-2 border-cyan-300 dark:border-cyan-700">{user?.name?.[0]}</div>
+                        <div className="text-right hidden sm:block">
+                            <p className="font-semibold text-sm text-gray-900 dark:text-white">{user?.name}</p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400">{user?.permissionLevel}</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </header>
+    ); 
 }
 function MainLoader() { const { user, loading } = useAuth(); if (loading) { return (<div className="min-h-screen flex flex-col items-center justify-center bg-gray-100 dark:bg-[#0D1117] text-cyan-500 dark:text-cyan-400"><h1 className="text-4xl font-bold mb-4 animate-pulse">OLYMPUS X</h1><p>Inicializando Ecossistema...</p></div>); } if (!auth || !db) { return (<div className="min-h-screen flex items-center justify-center bg-gray-100 dark:bg-[#0D1117] p-4"><GlassPanel className="w-full max-w-sm p-8 text-center"><h1 className="text-2xl font-bold text-center text-red-600 dark:text-red-400 mb-4">Erro de Configuração</h1><p className="text-center text-gray-600 dark:text-gray-300">Configuração do Firebase não encontrada.</p></GlassPanel></div>) } return user ? <MainApp /> : <LoginPage />; }
 

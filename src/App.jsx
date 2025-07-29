@@ -58,6 +58,60 @@ const formatDate = (dateString) => dateString ? new Date(dateString + 'T00:00:00
 const formatDateTime = (timestamp) => timestamp?.toDate ? timestamp.toDate().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : 'N/A';
 const formatCurrency = (value) => `R$ ${new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value || 0)}`;
 
+// --- MÁSCARAS E VALIDAÇÕES ---
+const mask = (value, pattern) => {
+    let i = 0;
+    const v = value.toString().replace(/\D/g, '');
+    return pattern.replace(/#/g, () => v[i++] || '');
+};
+const maskCPF = (value) => mask(value, '###.###.###-##');
+const maskCNPJ = (value) => mask(value, '##.###.###/####-##');
+const maskCEP = (value) => mask(value, '#####-###');
+
+const validateCNPJ = (cnpj) => {
+    cnpj = cnpj.replace(/[^\d]+/g, '');
+    if (cnpj === '' || cnpj.length !== 14 || /^(\d)\1+$/.test(cnpj)) return false;
+    let tamanho = cnpj.length - 2;
+    let numeros = cnpj.substring(0, tamanho);
+    let digitos = cnpj.substring(tamanho);
+    let soma = 0;
+    let pos = tamanho - 7;
+    for (let i = tamanho; i >= 1; i--) {
+        soma += numeros.charAt(tamanho - i) * pos--;
+        if (pos < 2) pos = 9;
+    }
+    let resultado = soma % 11 < 2 ? 0 : 11 - soma % 11;
+    if (resultado != digitos.charAt(0)) return false;
+    tamanho = tamanho + 1;
+    numeros = cnpj.substring(0, tamanho);
+    soma = 0;
+    pos = tamanho - 7;
+    for (let i = tamanho; i >= 1; i--) {
+        soma += numeros.charAt(tamanho - i) * pos--;
+        if (pos < 2) pos = 9;
+    }
+    resultado = soma % 11 < 2 ? 0 : 11 - soma % 11;
+    if (resultado != digitos.charAt(1)) return false;
+    return true;
+};
+
+const validateCPF = (cpf) => {
+    cpf = cpf.replace(/[^\d]+/g, '');
+    if (cpf === '' || cpf.length !== 11 || /^(\d)\1+$/.test(cpf)) return false;
+    let soma = 0;
+    let resto;
+    for (let i = 1; i <= 9; i++) soma = soma + parseInt(cpf.substring(i - 1, i)) * (11 - i);
+    resto = (soma * 10) % 11;
+    if ((resto === 10) || (resto === 11)) resto = 0;
+    if (resto !== parseInt(cpf.substring(9, 10))) return false;
+    soma = 0;
+    for (let i = 1; i <= 10; i++) soma = soma + parseInt(cpf.substring(i - 1, i)) * (12 - i);
+    resto = (soma * 10) % 11;
+    if ((resto === 10) || (resto === 11)) resto = 0;
+    if (resto !== parseInt(cpf.substring(10, 11))) return false;
+    return true;
+};
+
 // --- SISTEMA DE LOGS DETALHADOS ---
 const fieldNameMap = {
     status: 'Status',
@@ -486,14 +540,104 @@ const useToast = () => useContext(NotificationContext);
 
 const ConfirmContext = createContext();
 const ConfirmProvider = ({ children }) => { const [confirmState, setConfirmState] = useState(null); const awaitingPromiseRef = useRef(); const openConfirmation = (options) => { setConfirmState(options); return new Promise((resolve, reject) => { awaitingPromiseRef.current = { resolve, reject }; }); }; const handleClose = () => { if (awaitingPromiseRef.current) awaitingPromiseRef.current.reject(); setConfirmState(null); }; const handleConfirm = () => { if (awaitingPromiseRef.current) awaitingPromiseRef.current.resolve(); setConfirmState(null); }; return (<ConfirmContext.Provider value={openConfirmation}>{children}<ConfirmModal isOpen={!!confirmState} onClose={handleClose} onConfirm={handleConfirm} {...confirmState} /></ConfirmContext.Provider>); };
+
+// COLE ESTE NOVO CONTEXTO DE PREFERÊNCIAS
+const PreferencesContext = createContext();
+const PreferencesProvider = ({ children }) => {
+    const { user, updateUserProfile } = useAuth();
+    const defaultPreferences = { contourMode: false, uppercaseMode: false };
+    const [preferences, setPreferences] = useState(user?.preferences || defaultPreferences);
+
+    useEffect(() => {
+        setPreferences(user?.preferences || defaultPreferences);
+    }, [user]);
+
+    const updatePreferences = async (newPrefs) => {
+        if (user) {
+            const updatedPrefs = { ...preferences, ...newPrefs };
+            const success = await updateUserProfile(user.uid, { preferences: updatedPrefs });
+            if (success) {
+                setPreferences(updatedPrefs);
+                return true;
+            }
+        }
+        return false;
+    };
+
+    const value = { preferences, updatePreferences };
+
+    return <PreferencesContext.Provider value={value}>{children}</PreferencesContext.Provider>;
+};
+const usePreferences = () => useContext(PreferencesContext);
+
 const useConfirm = () => useContext(ConfirmContext);
 
 // --- COMPONENTES DE UI REUTILIZÁVEIS ---
+
+const Switch = ({ checked, onChange }) => {
+    return (
+        <button
+            type="button"
+            role="switch"
+            aria-checked={checked}
+            onClick={() => onChange(!checked)}
+            className={cn(
+                'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 dark:ring-offset-gray-900',
+                checked ? 'bg-cyan-600' : 'bg-gray-300 dark:bg-gray-700'
+            )}
+        >
+            <span
+                aria-hidden="true"
+                className={cn(
+                    'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                    checked ? 'translate-x-5' : 'translate-x-0'
+                )}
+            />
+        </button>
+    );
+};
+
 const GlassPanel = memo(forwardRef(({ className, children, cortex = false, ...props }, ref) => <div ref={ref} className={cn("bg-white/70 dark:bg-[#161b22]/50 backdrop-blur-2xl border border-gray-200 dark:border-white/10 rounded-2xl shadow-lg dark:shadow-2xl dark:shadow-black/20", cortex && "cortex-active", className)} {...props}>{children}</div>));
 const Button = memo(forwardRef(({ className, variant = 'default', size, children, ...props }, ref) => { const variants = { default: "bg-cyan-500 text-white hover:bg-cyan-600 dark:shadow-[0_0_20px_rgba(6,182,212,0.5)] dark:hover:shadow-[0_0_25px_rgba(6,182,212,0.7)]", destructive: "bg-red-600 text-white hover:bg-red-700 dark:shadow-[0_0_15px_rgba(220,38,38,0.5)]", outline: "border border-cyan-500/50 bg-transparent text-cyan-600 dark:text-cyan-400 hover:bg-cyan-500/10 dark:hover:bg-cyan-400/10 hover:border-cyan-500 dark:hover:border-cyan-400", ghost: "hover:bg-gray-900/10 dark:hover:bg-white/10 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white", violet: "bg-violet-600 text-white hover:bg-violet-700 dark:shadow-[0_0_20px_rgba(192,38,211,0.5)]" }; const sizes = { default: "h-10 px-4 py-2", sm: "h-9 px-3", lg: "h-11 px-8", icon: "h-10 w-10" }; return <button ref={ref} className={cn("inline-flex items-center justify-center rounded-lg text-sm font-semibold transition-all duration-300 disabled:opacity-50 disabled:pointer-events-none", variants[variant], sizes[size], className)} {...props}>{children}</button>; }));
-const Input = memo(forwardRef(({ className, error, isCurrency = false, ...props }, ref) => { const handleCurrencyChange = (e) => { let value = e.target.value; value = value.replace(/\D/g, ''); value = (Number(value) / 100).toFixed(2) + ''; value = value.replace('.', ','); value = value.replace(/(\d)(?=(\d{3})+(?!\d))/g, '$1.'); e.target.value = `R$ ${value}`; if (props.onChange) { props.onChange(e); } }; const finalProps = isCurrency ? { ...props, onChange: handleCurrencyChange } : props; return <input ref={ref} className={cn("flex h-10 w-full rounded-lg border border-gray-300 dark:border-white/10 bg-gray-100/50 dark:bg-black/20 px-3 py-2 text-sm text-gray-900 dark:text-gray-200 placeholder:text-gray-500 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all", error && "border-red-500 ring-red-500", className)} {...finalProps} /> }));
+const Input = memo(forwardRef(({ className, error, mask, isCurrency = false, ...props }, ref) => {
+    const { preferences } = usePreferences();
+    
+    const handleChange = (e) => {
+        const { value } = e.target;
+        if (mask) {
+            e.target.value = mask(value);
+        }
+        if (preferences.uppercaseMode && !isCurrency && e.target.type !== 'email' && e.target.type !== 'password') {
+            e.target.value = e.target.value.toUpperCase();
+        }
+        if (props.onChange) {
+            props.onChange(e);
+        }
+    };
+    
+    const handleCurrencyChange = (e) => { let value = e.target.value; value = value.replace(/\D/g, ''); value = (Number(value) / 100).toFixed(2) + ''; value = value.replace('.', ','); value = value.replace(/(\d)(?=(\d{3})+(?!\d))/g, '$1.'); e.target.value = `R$ ${value}`; if (props.onChange) { props.onChange(e); } };
+
+    const finalProps = isCurrency ? { ...props, onChange: handleCurrencyChange } : { ...props, onChange: handleChange };
+    
+    return <input ref={ref} className={cn("flex h-10 w-full rounded-lg border border-gray-300 dark:border-white/10 bg-gray-100/50 dark:bg-black/20 px-3 py-2 text-sm text-gray-900 dark:text-gray-200 placeholder:text-gray-500 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all", error && "border-red-500 ring-red-500", preferences.uppercaseMode && "uppercase", className)} {...finalProps} />
+}));
+
 const Label = memo(forwardRef(({ className, ...props }, ref) => <label ref={ref} className={cn("text-sm font-bold text-gray-600 dark:text-gray-400", className)} {...props} />));
-const Textarea = memo(forwardRef(({ className, ...props }, ref) => <textarea ref={ref} className={cn("flex min-h-[80px] w-full rounded-lg border border-gray-300 dark:border-white/10 bg-gray-100/50 dark:bg-black/20 px-3 py-2 text-sm text-gray-900 dark:text-gray-200 placeholder:text-gray-500 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all", className)} {...props} />));
+const Textarea = memo(forwardRef(({ className, ...props }, ref) => {
+    const { preferences } = usePreferences();
+
+    const handleChange = (e) => {
+        if (preferences.uppercaseMode) {
+            e.target.value = e.target.value.toUpperCase();
+        }
+        if (props.onChange) {
+            props.onChange(e);
+        }
+    };
+
+    return <textarea ref={ref} className={cn("flex min-h-[80px] w-full rounded-lg border border-gray-300 dark:border-white/10 bg-gray-100/50 dark:bg-black/20 px-3 py-2 text-sm text-gray-900 dark:text-gray-200 placeholder:text-gray-500 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all", preferences.uppercaseMode && "uppercase", className)} {...props} onChange={handleChange} />
+}));
+
 const Select = memo(forwardRef(({ className, children, error, ...props }, ref) => <div className="relative"><select ref={ref} className={cn("flex h-10 w-full items-center justify-between rounded-lg border border-gray-300 dark:border-white/10 bg-gray-100/50 dark:bg-black/20 px-3 py-2 text-sm text-gray-900 dark:text-gray-200 placeholder:text-gray-500 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all appearance-none pr-8", error && "border-red-500 ring-red-500", className)} {...props}>{children}</select><div className="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none"><ChevronDownIcon className="h-4 w-4 text-gray-500 dark:text-gray-400" /></div></div>));
 const DateField = memo(forwardRef(({ className, ...props }, ref) => (
     <div className="relative">
@@ -544,14 +688,14 @@ const AvatarFallback = ({ children, ...props }) => <span className="flex h-full 
 // --- COMPONENTES DE FORMULÁRIO (CLIENTES) ---
 const FormSection = ({ title, children, cols = 3 }) => (<div className="mb-8"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80 border-b border-gray-200 dark:border-white/10 pb-3 mb-6">{title}</h3><div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-${cols} gap-6`}>{children}</div></div>);
 const GeneralInfoForm = ({ formData, handleChange, errors }) => (
+    <>
     <FormSection title="Visão Geral" cols={3}>
-        {/* --- LINHA 1 (ORDEM AJUSTADA) --- */}
         <div>
             <Label>Nome da Empresa</Label>
             <Input name="general.companyName" value={formData?.general?.companyName || ''} onChange={handleChange} />
         </div>
         <div>
-            <Label>Tipo de Contrato</Label>
+            <Label>Tipo de Plano</Label>
             <Select name="general.clientType" value={formData?.general?.clientType || ''} onChange={handleChange}>
                 <option>PME</option><option>Pessoa Física</option><option>Adesão</option>
             </Select>
@@ -562,11 +706,10 @@ const GeneralInfoForm = ({ formData, handleChange, errors }) => (
                 <option>Ativo</option><option>Inativo</option><option>Prospect</option><option>Pendente</option>
             </Select>
         </div>
-
-        {/* --- LINHA 2 --- */}
         <div>
             <Label>CNPJ</Label>
-            <Input name="general.cnpj" value={formData?.general?.cnpj || ''} onChange={handleChange} />
+            <Input name="general.cnpj" value={formData?.general?.cnpj || ''} onChange={handleChange} mask={maskCNPJ} error={errors?.cnpj} maxLength="18" />
+            {errors?.cnpj && <p className="text-xs text-red-500 mt-1">{errors.cnpj}</p>}
         </div>
         <div>
             <Label>Nome do Responsável</Label>
@@ -574,11 +717,40 @@ const GeneralInfoForm = ({ formData, handleChange, errors }) => (
         </div>
         <div>
             <Label>CPF do Responsável</Label>
-            <Input name="general.responsibleCpf" value={formData?.general?.responsibleCpf || ''} onChange={handleChange} />
+            <Input name="general.responsibleCpf" value={formData?.general?.responsibleCpf || ''} onChange={handleChange} mask={maskCPF} error={errors?.responsibleCpf} maxLength="14" />
+            {errors?.responsibleCpf && <p className="text-xs text-red-500 mt-1">{errors.responsibleCpf}</p>}
         </div>
+    </FormSection>
 
-        {/* --- LINHA 3 (COM A NOVA LÓGICA) --- */}
+    <FormSection title="Endereço" cols={3}>
         <div>
+            <Label>CEP</Label>
+            <Input name="address.cep" value={formData?.address?.cep || ''} onChange={handleChange} mask={maskCEP} maxLength="9" />
+        </div>
+        <div>
+            <Label>Logradouro</Label>
+            <Input name="address.street" value={formData?.address?.street || ''} onChange={handleChange} />
+        </div>
+        <div>
+            <Label>Complemento</Label>
+            <Input name="address.complement" value={formData?.address?.complement || ''} onChange={handleChange} />
+        </div>
+        <div>
+            <Label>Bairro</Label>
+            <Input name="address.neighborhood" value={formData?.address?.neighborhood || ''} onChange={handleChange} />
+        </div>
+        <div>
+            <Label>Cidade</Label>
+            <Input name="address.city" value={formData?.address?.city || ''} onChange={handleChange} />
+        </div>
+        <div>
+            <Label>Estado</Label>
+            <Input name="address.state" value={formData?.address?.state || ''} onChange={handleChange} />
+        </div>
+    </FormSection>
+
+    <FormSection title="Contato" cols={3}>
+         <div>
             <Label>Responsável</Label>
             <Select name="general.responsibleStatus" value={formData?.general?.responsibleStatus || 'É beneficiário'} onChange={handleChange}>
                 <option>É beneficiário</option>
@@ -593,8 +765,6 @@ const GeneralInfoForm = ({ formData, handleChange, errors }) => (
             <Label>Telefone Responsável</Label>
             <Input type="tel" name="general.holderCpf" value={formData?.general?.holderCpf || ''} onChange={handleChange} />
         </div>
-
-        {/* --- LINHA 4 --- */}
         <div>
             <Label>Nome do Contato</Label>
             <Input name="general.phone" value={formData?.general?.phone || ''} onChange={handleChange} />
@@ -608,6 +778,7 @@ const GeneralInfoForm = ({ formData, handleChange, errors }) => (
             <Input type="tel" name="general.contactPhone" value={formData?.general?.contactPhone || ''} onChange={handleChange} />
         </div>
     </FormSection>
+    </>
 );
 const InternalDataForm = ({ formData, handleChange }) => {
     const { users, partners } = useData();
@@ -643,6 +814,7 @@ const InternalDataForm = ({ formData, handleChange }) => {
         </FormSection>
     );
 };
+
 const BeneficiaryModal = ({ isOpen, onClose, onSave, beneficiary }) => {
     const getInitialFormState = () => ({ id: null, name: '', cpf: '', dob: '', kinship: 'Titular', weight: '', height: '', idCardNumber: '', credentials: { appLogin: '', appPassword: '' } });
     const [formState, setFormState] = useState(getInitialFormState());
@@ -722,15 +894,12 @@ const BeneficiaryModal = ({ isOpen, onClose, onSave, beneficiary }) => {
                     <div><Label>IMC</Label><p className="h-10 flex items-center px-3 text-gray-700 dark:text-gray-300">{imc.value ? `${imc.value} - ${imc.classification}` : 'N/D'}</p></div>
                     <div><Label>Parentesco</Label><Select name="kinship" value={formState.kinship} onChange={handleChange} required>{kinshipOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}</Select></div>
                 </div>
-
                 <div><Label>Número da Carteirinha</Label><Input name="idCardNumber" value={formState.idCardNumber} onChange={handleChange} /></div>
-
                 <h4 className="text-md font-semibold text-cyan-600 dark:text-cyan-400/80 border-t pt-4 mt-4">Credenciais do Beneficiário</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div><Label>Login do App</Label><Input name="credentials.appLogin" value={formState.credentials?.appLogin || ''} onChange={handleChange} /></div>
-                    <div><Label>Senha do App</Label><Input type="password" name="credentials.appPassword" value={formState.credentials?.appPassword || ''} onChange={handleChange} /></div>
+                    <div><Label>Senha do App</Label><Input type="text" name="credentials.appPassword" value={formState.credentials?.appPassword || ''} onChange={handleChange} /></div>
                 </div>
-
                 <div className="flex justify-end gap-4 pt-4">
                     <Button type="button" variant="outline" onClick={onClose}>Cancelar</Button>
                     <Button type="button" onClick={handleSubmit}>Salvar</Button>
@@ -739,7 +908,6 @@ const BeneficiaryModal = ({ isOpen, onClose, onSave, beneficiary }) => {
         </Modal>
     );
 };
-
 const BeneficiariesForm = ({ beneficiaries, setBeneficiaries, toast }) => {
     const [isModalOpen, setModalOpen] = useState(false);
     const [currentBeneficiary, setCurrentBeneficiary] = useState(null);
@@ -803,7 +971,40 @@ const BeneficiariesForm = ({ beneficiaries, setBeneficiaries, toast }) => {
 
 // --- ABAS E COMPONENTES DE DETALHES ---
 const HistoryForm = ({ observations, setObservations }) => { const { user } = useAuth(); const [newObservation, setNewObservation] = useState(''); const handleAddObservation = () => { if (!newObservation.trim()) return; const observationEntry = { text: newObservation, authorId: user.uid, authorName: user.name, timestamp: new Date() }; setObservations([observationEntry, ...(observations || [])]); setNewObservation(''); }; return (<div className="mb-8"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80 border-b border-gray-200 dark:border-white/10 pb-3 mb-6">Histórico de Observações</h3><div className="space-y-4"><div><Label>Nova Observação</Label><Textarea value={newObservation} onChange={(e) => setNewObservation(e.target.value)} rows={4} placeholder="Adicione uma nova anotação sobre a interação com o cliente..." /><div className="text-right mt-2"><Button type="button" size="sm" onClick={handleAddObservation}>Adicionar ao Histórico</Button></div></div><div className="space-y-4 max-h-96 overflow-y-auto pr-2">{(observations || []).length === 0 ? (<p className="text-gray-500 text-center py-4">Nenhuma observação registrada.</p>) : ((observations || []).map((obs, index) => (<div key={index} className="bg-gray-100 dark:bg-black/20 p-4 rounded-lg"><p className="text-gray-800 dark:text-gray-200 whitespace-pre-wrap">{obs.text}</p><p className="text-xs text-gray-500 dark:text-gray-500 mt-2 text-right">{obs.authorName} em {formatDateTime(obs.timestamp)}</p></div>)))}</div></div></div>); };
-const DetailItem = memo(( { label, value, isPassword = false, isLink = false, children, isCurrency = false } ) => { const { toast } = useToast(); const [showPassword, setShowPassword] = useState(false); const handleCopy = () => { try { const tempInput = document.createElement('textarea'); tempInput.value = value; document.body.appendChild(tempInput); tempInput.select(); document.execCommand('copy'); document.body.removeChild(tempInput); toast({ title: 'Copiado!', description: `${label} copiado.` }); } catch (err) { toast({ title: 'Erro', description: `Não foi possível copiar.`, variant: 'destructive' }); } }; const displayValue = value || 'N/A'; return (<div className="py-3"><Label>{label}</Label><div className="flex items-center justify-between mt-1 group"><div className="text-md text-gray-800 dark:text-gray-100 break-words">{children ? children : (isLink && value ? <a href={value} target="_blank" rel="noopener noreferrer" className="text-cyan-600 dark:text-cyan-400 hover:underline">{displayValue}</a> : (isPassword && !showPassword ? '••••••••' : (isCurrency ? formatCurrency(value) : displayValue)))}</div><div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">{isPassword && value && (<Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setShowPassword(!showPassword)}>{showPassword ? <EyeOffIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}</Button>)}{value && (<Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleCopy}><CopyIcon className="h-4 w-4" /></Button>)}</div></div></div>); });
+const DetailItem = memo(( { label, value, isPassword = false, isLink = false, children, isCurrency = false } ) => {
+    const { toast } = useToast();
+    const { preferences } = usePreferences();
+    const { contourMode, uppercaseMode } = preferences;
+    const [showPassword, setShowPassword] = useState(false);
+    
+    const handleCopy = () => { try { const tempInput = document.createElement('textarea'); tempInput.value = value; document.body.appendChild(tempInput); tempInput.select(); document.execCommand('copy'); document.body.removeChild(tempInput); toast({ title: 'Copiado!', description: `${label} copiado.` }); } catch (err) { toast({ title: 'Erro', description: `Não foi possível copiar.`, variant: 'destructive' }); } };
+    
+    let displayValue = value || 'N/A';
+    if (uppercaseMode && typeof displayValue === 'string' && !isCurrency) {
+        displayValue = displayValue.toUpperCase();
+    }
+    
+    return (
+    <div className="py-1">
+        <Label>{label}</Label>
+        <div className={cn(
+            "flex items-center justify-between mt-1 group",
+            contourMode && "border border-gray-200 dark:border-white/10 rounded-lg px-3 min-h-[40px] bg-gray-100/30 dark:bg-black/10"
+        )}>
+            <div className={cn("text-md text-gray-800 dark:text-gray-100 break-words", uppercaseMode && "uppercase")}>
+                {children ? children :
+                 (isLink && value ? <a href={value} target="_blank" rel="noopener noreferrer" className="text-cyan-600 dark:text-cyan-400 hover:underline">{displayValue}</a> :
+                 (isPassword && !showPassword ? '••••••••' :
+                 (isCurrency ? formatCurrency(value) : displayValue)))}
+            </div>
+            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                {isPassword && value && (<Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setShowPassword(!showPassword)}>{showPassword ? <EyeOffIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}</Button>)}
+                {value && (<Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleCopy}><CopyIcon className="h-4 w-4" /></Button>)}
+            </div>
+        </div>
+    </div>
+    );
+});
 const InternalTab = ({ client }) => { const { users } = useData(); const broker = users.find(u => u.id === client?.internal?.brokerId); const supervisor = users.find(u => u.id === client?.internal?.supervisorId); return (<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-1"><DetailItem label="Corretor" value={broker?.name} /><DetailItem label="Supervisor" value={supervisor?.name} /></div>); };
 const BeneficiaryViewModal = ({ isOpen, onClose, beneficiary }) => {
     if (!beneficiary) return null;
@@ -1064,24 +1265,20 @@ const CredentialModal = ({ isOpen, onClose, onSave, credential }) => {
                     <Label>Título (Ex: Portal Amil Saúde, Acesso Dental Uni)</Label>
                     <Input name="title" value={formState.title} onChange={handleChange} required placeholder="Identificação da credencial" />
                 </div>
-
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t pt-4">
                     <div><Label>Email Criado</Label><Input name="createdEmail" value={formState.createdEmail} onChange={handleChange} /></div>
-                    <div><Label>Senha do Email Criado</Label><Input type="password" name="createdEmailPassword" value={formState.createdEmailPassword} onChange={handleChange} /></div>
+                    <div><Label>Senha do Email Criado</Label><Input type="text" name="createdEmailPassword" value={formState.createdEmailPassword} onChange={handleChange} /></div>
                 </div>
-
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t pt-4">
                     <div><Label>Site do Portal</Label><Input name="portalSite" value={formState.portalSite} onChange={handleChange} placeholder="https://exemplo.com" /></div>
-                    <div><Label>Senha do Portal</Label><Input type="password" name="portalPassword" value={formState.portalPassword} onChange={handleChange} /></div>
+                    <div><Label>Senha do Portal</Label><Input type="text" name="portalPassword" value={formState.portalPassword} onChange={handleChange} /></div>
                     <div><Label>Login do Portal</Label><Input name="portalLogin" value={formState.portalLogin} onChange={handleChange} /></div>
                     <div><Label>Usuário do Portal</Label><Input name="portalUser" value={formState.portalUser} onChange={handleChange} /></div>
                 </div>
-
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t pt-4">
                     <div><Label>Login do App</Label><Input name="appLogin" value={formState.appLogin} onChange={handleChange} /></div>
-                    <div><Label>Senha do App</Label><Input type="password" name="appPassword" value={formState.appPassword} onChange={handleChange} /></div>
+                    <div><Label>Senha do App</Label><Input type="text" name="appPassword" value={formState.appPassword} onChange={handleChange} /></div>
                 </div>
-
                 <div className="flex justify-end gap-4 pt-6">
                     <Button type="button" variant="outline" onClick={onClose}>Cancelar</Button>
                     <Button type="button" onClick={handleSubmit}>Salvar Credencial</Button>
@@ -1090,7 +1287,30 @@ const CredentialModal = ({ isOpen, onClose, onSave, credential }) => {
         </Modal>
     );
 };
-const AddCollaboratorModal = ({ isOpen, onClose, onSave }) => { const [formData, setFormData] = useState({ name: '', email: '', password: '', permissionLevel: 'Corretor', supervisorId: '' }); const { users } = useData(); const handleChange = (e) => setFormData(prev => ({...prev, [e.target.name]: e.target.value })); const handleSubmit = (e) => { e.preventDefault(); onSave(formData); setFormData({ name: '', email: '', password: '', permissionLevel: 'Corretor', supervisorId: '' }); }; return (<Modal isOpen={isOpen} onClose={onClose} title="Adicionar Novo Colaborador"><form onSubmit={handleSubmit} className="space-y-4"><div><Label>Nome Completo</Label><Input name="name" onChange={handleChange} required /></div><div><Label>Email</Label><Input type="email" name="email" onChange={handleChange} required /></div><div><Label>Senha</Label><Input type="password" name="password" onChange={handleChange} required /></div><div><Label>Nível de Permissão</Label><Select name="permissionLevel" value={formData.permissionLevel} onChange={handleChange}><option>Corretor</option><option>Supervisor</option><option>Admin</option></Select></div>{formData.permissionLevel === 'Corretor' && (<div><Label>Vincular ao Supervisor</Label><Select name="supervisorId" value={formData.supervisorId} onChange={handleChange}><option value="">Nenhum</option>{users.filter(u => u.permissionLevel === 'Supervisor').map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></div>)}<div className="flex justify-end gap-4 pt-4"><Button type="button" variant="outline" onClick={onClose}>Cancelar</Button><Button type="submit">Adicionar</Button></div></form></Modal>); };
+const AddCollaboratorModal = ({ isOpen, onClose, onSave }) => {
+    const [formData, setFormData] = useState({ name: '', email: '', password: '', permissionLevel: 'Corretor', supervisorId: '' });
+    const { users } = useData();
+    const handleChange = (e) => setFormData(prev => ({...prev, [e.target.name]: e.target.value }));
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        onSave(formData);
+        setFormData({ name: '', email: '', password: '', permissionLevel: 'Corretor', supervisorId: '' });
+    };
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title="Adicionar Novo Colaborador">
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <div><Label>Nome Completo</Label><Input name="name" onChange={handleChange} required /></div>
+                <div><Label>Email</Label><Input type="email" name="email" onChange={handleChange} required /></div>
+                <div><Label>Senha</Label><Input type="text" name="password" onChange={handleChange} required /></div>
+                <div><Label>Nível de Permissão</Label><Select name="permissionLevel" value={formData.permissionLevel} onChange={handleChange}><option>Corretor</option><option>Supervisor</option><option>Admin</option></Select></div>
+                {formData.permissionLevel === 'Corretor' && (<div><Label>Vincular ao Supervisor</Label><Select name="supervisorId" value={formData.supervisorId} onChange={handleChange}><option value="">Nenhum</option>{users.filter(u => u.permissionLevel === 'Supervisor').map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></div>)}
+                <div className="flex justify-end gap-4 pt-4"><Button type="button" variant="outline" onClick={onClose}>Cancelar</Button><Button type="submit">Adicionar</Button></div>
+            </form>
+        </Modal>
+    );
+};
+
+
 const AddPartnerModal = ({ isOpen, onClose, onSave }) => {
     const [formData, setFormData] = useState({ name: '', type: 'Corretor', document: '', email: '', phone: '', notes: '' });
     const handleChange = (e) => setFormData(prev => ({...prev, [e.target.name]: e.target.value }));
@@ -1169,6 +1389,8 @@ const TaskModal = ({ isOpen, onClose, onSave, task }) => { const { users, client
 const ConfirmModal = ({ isOpen, onClose, onConfirm, title, description }) => { if (!isOpen) return null; return (<Modal isOpen={isOpen} onClose={onClose} title={title || "Confirmar Ação"}><p className="text-gray-700 dark:text-gray-300">{description || "Tem certeza que deseja prosseguir?"}</p><div className="flex justify-end gap-4 mt-6"><Button variant="outline" onClick={onClose}>Cancelar</Button><Button variant="destructive" onClick={onConfirm}>Confirmar</Button></div></Modal>); };
 const ContractModal = ({ isOpen, onClose, onSave, contract, clientType }) => {
     const { operators, users } = useData();
+    const sortedOperators = useMemo(() => [...operators].sort((a, b) => a.name.localeCompare(b.name)), [operators]);
+    
     const getInitialState = () => ({
         id: `local_${Date.now()}`,
         status: 'ativo',
@@ -1178,16 +1400,16 @@ const ContractModal = ({ isOpen, onClose, onSave, contract, clientType }) => {
         previousPlan: '',
         planTypes: [],
         planCategory: '',
-        accommodation: 'Enfermaria',
+        accommodation: '',
         contractValue: '',
         feeValue: '',
-        paymentMethod: 'Boleto',
+        paymentMethod: '',
         monthlyDueDate: '',
         effectiveDate: '',
         boletoSentDate: '',
         renewalDate: '',
         boletoResponsibleId: '',
-        credentialsList: [] // Sistema de lista de credenciais
+        credentialsList: []
     });
 
     const [formState, setFormState] = useState(getInitialState());
@@ -1236,20 +1458,18 @@ const ContractModal = ({ isOpen, onClose, onSave, contract, clientType }) => {
     return (
         <Modal isOpen={isOpen} onClose={onClose} title={contract ? "Editar Contrato" : "Adicionar Novo Contrato"} size="6xl">
             <form onSubmit={handleSubmit} className="space-y-6">
-                {/* --- DADOS DO CONTRATO --- */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                    <div><Label>Plano Fechado (Operadora)</Label><Select name="planOperator" value={formState.planOperator || ''} onChange={handleChange}><option value="">Selecione</option>{operators.map(op => <option key={op.id} value={op.name}>{op.name}</option>)}</Select></div>
+                    <div><Label>Plano Fechado (Operadora)</Label><Select name="planOperator" value={formState.planOperator || ''} onChange={handleChange}><option value="">Selecione</option>{sortedOperators.map(op => <option key={op.id} value={op.name}>{op.name}</option>)}</Select></div>
                     <div><Label>Número da Proposta</Label><Input name="proposalNumber" value={formState.proposalNumber || ''} onChange={handleChange} /></div>
                     <div><Label>Número da Apólice / Contrato</Label><Input name="policyNumber" value={formState.policyNumber || ''} onChange={handleChange} /></div>
                 </div>
-                {/* ... (outras linhas do formulário de contrato) ... */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                     <div><Label>Categoria do Plano</Label><Input name="planCategory" value={formState.planCategory || ''} onChange={handleChange} /></div>
                     <div><Label>Acomodação</Label><Select name="accommodation" value={formState.accommodation || ''} onChange={handleChange}><option>Enfermaria</option><option>Apartamento</option></Select></div>
                     <div><Label>Tipo de Plano</Label><div className="flex gap-6 mt-2 pt-2 text-gray-800 dark:text-gray-300"><label className="font-bold flex items-center gap-2"><Checkbox name="planTypes" value="Saúde" checked={(formState.planTypes || []).includes('Saúde')} onChange={handleChange} /> Saúde</label><label className="font-bold flex items-center gap-2"><Checkbox name="planTypes" value="Dental" checked={(formState.planTypes || []).includes('Dental')} onChange={handleChange} /> Dental</label></div></div>
                 </div>
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                    <div><Label>Tipo de Contrato (da Visão Geral)</Label><p className="h-10 flex items-center px-3 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-black/20 rounded-lg">{clientType || 'N/A'}</p></div>
+                    <div><Label>Tipo de Plano (da Visão Geral)</Label><p className="h-10 flex items-center px-3 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-black/20 rounded-lg">{clientType || 'N/A'}</p></div>
                     <div><Label>Valor do Contrato</Label><Input type="number" name="contractValue" value={formState.contractValue || ''} onChange={handleChange} /></div>
                     <div><Label>Valor da Taxa</Label><Input type="number" name="feeValue" value={formState.feeValue || ''} onChange={handleChange} /></div>
                 </div>
@@ -1262,20 +1482,18 @@ const ContractModal = ({ isOpen, onClose, onSave, contract, clientType }) => {
                     <div><Label>Data Envio do Boleto</Label><DateField name="boletoSentDate" value={formState.boletoSentDate || ''} onChange={handleChange} /></div>
                     <div><Label>Responsável pelo Boleto</Label><Select name="boletoResponsibleId" value={formState.boletoResponsibleId || ''} onChange={handleChange}><option value="">Selecione...</option>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></div>
                 </div>
-                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                     <div><Label>Renovação de Contrato</Label><DateField name="renewalDate" value={formState.renewalDate || ''} onChange={handleChange} /></div>
                     <div><Label>Status</Label><Select name="status" value={formState.status || 'ativo'} onChange={handleChange}><option value="ativo">Ativo</option><option value="inativo">Inativo (Histórico)</option></Select></div>
-                     <div><Label>Plano Anterior</Label><Input name="previousPlan" value={formState.previousPlan || ''} onChange={handleChange} /></div>
+                    <div><Label>Plano Anterior</Label><Input name="previousPlan" value={formState.previousPlan || ''} onChange={handleChange} /></div>
                 </div>
-
-                {/* --- SISTEMA DE GERENCIAMENTO DE CREDENCIAIS --- */}
                 <div className="border-t border-gray-200 dark:border-white/10 pt-4 mt-4">
-                     <div className="flex justify-between items-center mb-4">
+                    <div className="flex justify-between items-center mb-4">
                         <h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80">Credenciais</h3>
                         <Button type="button" onClick={() => { setEditingCredential(null); setCredentialModalOpen(true); }}><PlusCircleIcon className="h-4 w-4 mr-2" />Adicionar Credencial</Button>
                     </div>
                     <div className="space-y-2">
-                         {(formState.credentialsList || []).length === 0 ? <p className="text-gray-500 text-center py-4">Nenhuma credencial adicionada.</p> : (formState.credentialsList || []).map(cred => (
+                        {(formState.credentialsList || []).length === 0 ? <p className="text-gray-500 text-center py-4">Nenhuma credencial adicionada.</p> : (formState.credentialsList || []).map(cred => (
                             <div key={cred.id} className="p-3 rounded-lg flex justify-between items-center bg-gray-100 dark:bg-black/20">
                                 <div><p className="font-semibold text-gray-900 dark:text-white">{cred.title}</p><p className="text-sm text-gray-600 dark:text-gray-400">{cred.portalSite || cred.createdEmail}</p></div>
                                 <div className="flex gap-2"><Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setEditingCredential(cred); setCredentialModalOpen(true); }}><PencilIcon className="h-4 w-4" /></Button><Button type="button" variant="ghost" size="icon" className="h-8 w-8 text-red-500/70" onClick={() => handleDeleteCredential(cred.id)}><Trash2Icon className="h-4 w-4" /></Button></div>
@@ -1283,14 +1501,12 @@ const ContractModal = ({ isOpen, onClose, onSave, contract, clientType }) => {
                         ))}
                     </div>
                 </div>
-
                 <div className="flex justify-end gap-4 pt-4"><Button type="button" variant="outline" onClick={onClose}>Cancelar</Button><Button type="submit">Salvar Contrato</Button></div>
             </form>
             <CredentialModal isOpen={isCredentialModalOpen} onClose={() => setCredentialModalOpen(false)} onSave={handleSaveCredential} credential={editingCredential} />
         </Modal>
     );
 };
-
 // --- PÁGINAS PRINCIPAIS ---
 const CommissionWizardModal = ({ isOpen, onClose, onSave }) => {
     const { clients, users } = useData();
@@ -1481,22 +1697,20 @@ function ClientForm({ client, onSave, onCancel, isConversion = false, leadData =
     const [activeTab, setActiveTab] = useState(initialTab || 'general');
 
     const handleBeneficiariesChange = useCallback((newBeneficiariesArray) => {
-    setFormData(currentFormData => ({
-        ...currentFormData,
-        beneficiaries: newBeneficiariesArray
-    }));
-}, []);
+        setFormData(currentFormData => ({ ...currentFormData, beneficiaries: newBeneficiariesArray }));
+    }, []);
 
     useEffect(() => {
-       const defaultData = {
-    general: { status: 'Ativo', clientType: 'PME', contactRole: '', isResponsibleBeneficiary: 'Sim' },
-    contracts: [],
-    internal: {},
-    beneficiaries: [],
-    observations: [],
-    commission: {},
-    boletoExceptions: []
-};
+        const defaultData = {
+            general: { status: 'Ativo', clientType: 'PME', contactRole: '', isResponsibleBeneficiary: 'Sim' },
+            address: { cep: '', street: '', complement: '', neighborhood: '', city: '', state: '' },
+            contracts: [],
+            internal: {},
+            beneficiaries: [],
+            observations: [],
+            commission: {},
+            boletoExceptions: []
+        };
         if (isConversion && leadData) {
             const conversionData = {
                 ...defaultData,
@@ -1572,8 +1786,25 @@ function ClientForm({ client, onSave, onCancel, isConversion = false, leadData =
         setFormData(p => ({...p, contracts: newContracts}));
     };
     
+    const validateForm = () => {
+        const newErrors = {};
+        const { general } = formData;
+        if (general?.cnpj && !validateCNPJ(general.cnpj)) {
+            newErrors.cnpj = "CNPJ inválido.";
+        }
+        if (general?.responsibleCpf && !validateCPF(general.responsibleCpf)) {
+            newErrors.responsibleCpf = "CPF inválido.";
+        }
+        setErrors(newErrors);
+        return Object.keys(newErrors).length === 0;
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (!validateForm()) {
+            toast({ title: "Verifique os campos", description: "Há campos com dados inválidos.", variant: 'destructive' });
+            return;
+        }
         const { id, ...dataToSave } = formData;
         const isEditing = !!id;
         const result = isEditing ? await updateClient(id, dataToSave) : await addClient(dataToSave);
@@ -1593,14 +1824,12 @@ function ClientForm({ client, onSave, onCancel, isConversion = false, leadData =
                         <TabsList>
                             <TabsTrigger value="general">Visão Geral</TabsTrigger>
                             <TabsTrigger value="contracts">Contratos</TabsTrigger>
-
                             <TabsTrigger value="beneficiaries">Beneficiários</TabsTrigger>
                             <TabsTrigger value="history">Histórico</TabsTrigger>
                             <TabsTrigger value="internal">Dados Internos</TabsTrigger>
                         </TabsList>
                         <TabsContent value="general">
                             <GeneralInfoForm formData={formData} handleChange={handleChange} errors={errors} />
-
                         </TabsContent>
                         <TabsContent value="contracts">
                             <div className="flex justify-between items-center mb-4">
@@ -1617,11 +1846,7 @@ function ClientForm({ client, onSave, onCancel, isConversion = false, leadData =
                             </div>
                         </TabsContent>
                         <TabsContent value="beneficiaries">
-                            <BeneficiariesForm 
-    beneficiaries={formData.beneficiaries || []} 
-    setBeneficiaries={handleBeneficiariesChange}
-    toast={toast} 
-/>
+                            <BeneficiariesForm beneficiaries={formData.beneficiaries || []} setBeneficiaries={handleBeneficiariesChange} toast={toast} />
                         </TabsContent>
                         <TabsContent value="history"><HistoryForm observations={formData.observations || []} setObservations={(o) => setFormData(p => ({...p, observations: o}))} /></TabsContent>
                         <TabsContent value="internal"><InternalDataForm formData={formData} handleChange={handleChange} /></TabsContent>
@@ -1632,16 +1857,41 @@ function ClientForm({ client, onSave, onCancel, isConversion = false, leadData =
                     <Button type="submit" disabled={loading}>{loading ? 'Salvando...' : (isConversion ? 'Converter em Cliente' : 'Salvar Cliente')}</Button>
                 </div>
             </form>
-            <ContractModal isOpen={isContractModalOpen} onClose={() => setContractModalOpen(false)} onSave={handleSaveContract} contract={editingContract} />
+            <ContractModal isOpen={isContractModalOpen} onClose={() => setContractModalOpen(false)} onSave={handleSaveContract} contract={editingContract} clientType={formData?.general?.clientType} />
         </div>
     );
 }
-function ClientsList({ onClientSelect, onAddClient }) { const { clients, loading, operators } = useData(); const [searchTerm, setSearchTerm] = useState(''); const [filters, setFilters] = useState({ status: '', operator: '', month: '' }); const [showFilters, setShowFilters] = useState(false); const [currentPage, setCurrentPage] = useState(1); const itemsPerPage = 10; const handleFilterChange = (e) => { setCurrentPage(1); setFilters(prev => ({ ...prev, [e.target.name]: e.target.value })); }; const filteredClients = useMemo(() => clients.filter(client => { const searchMatch = (`${client?.general?.companyName || ''} ${client?.general?.holderName || ''} ${client?.general?.email || ''}`).toLowerCase().includes(searchTerm.toLowerCase()); const statusMatch = filters.status ? client?.general?.status === filters.status : true; const operatorMatch = filters.operator ? (client?.contracts || []).some(c => c.planOperator === filters.operator) : true; const monthMatch = filters.month ? (client?.contracts || []).some(c => c.effectiveDate?.startsWith(filters.month)) : true; return searchMatch && statusMatch && operatorMatch && monthMatch; }), [clients, searchTerm, filters]); const totalPages = Math.ceil(filteredClients.length / itemsPerPage); const currentClients = filteredClients.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage); const renderTableRows = () => { if (loading && clients.length === 0) return Array.from({ length: 5 }).map((_, i) => <SkeletonRow key={i} />); if (currentClients.length > 0) { return currentClients.map((client) => { const activeContract = client.contracts?.find(c => c.status === 'ativo'); return (<tr key={client.id} onClick={() => onClientSelect(client.id)} className="hover:bg-gray-100/50 dark:hover:bg-cyan-500/5 cursor-pointer transition-colors duration-200"><td className="px-6 py-4 whitespace-nowrap"><div className="font-medium text-gray-900 dark:text-white">{client?.general?.companyName || client?.general?.holderName}</div><div className="text-sm text-gray-500 dark:text-gray-400">{client?.general?.email}</div></td><td className="px-6 py-4 whitespace-nowrap"><span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${client?.general?.status === 'Ativo' ? 'bg-green-100 text-green-800 dark:bg-green-500/20 dark:text-green-400' : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-500/20 dark:text-yellow-400'}`}>{client?.general?.status}</span></td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">{activeContract?.planOperator || 'N/A'}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{formatDate(activeContract?.effectiveDate) || 'N/A'}</td></tr>) }); } return <tr><td colSpan="4"><EmptyState title="Nenhum Cliente Encontrado" message="Ajuste os filtros ou adicione um novo cliente." actionText="Adicionar Novo Cliente" onAction={onAddClient} /></td></tr>; }; return (<div className="p-4 sm:p-6 lg:p-8"><div className="flex justify-between items-center mb-6"><h2 className="text-3xl font-bold text-gray-900 dark:text-white">Clientes</h2><div className="flex gap-2"><Button variant="outline" onClick={() => setShowFilters(!showFilters)}><FilterIcon className="h-4 w-4 mr-2" /> Filtros</Button><Button onClick={onAddClient}><PlusCircleIcon className="h-5 w-5 mr-2" /> Adicionar Cliente</Button></div></div>{showFilters && (<GlassPanel className="p-4 mb-6"><div className="grid grid-cols-1 md:grid-cols-4 gap-4"><Input placeholder="Procurar..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} /><Select name="status" value={filters.status} onChange={handleFilterChange}><option value="">Todos Status</option><option>Ativo</option><option>Inativo</option></Select><Select name="operator" value={filters.operator} onChange={handleFilterChange}><option value="">Todas Operadoras</option>{operators.map(op => <option key={op.id} value={op.name}>{op.name}</option>)}</Select><Input type="month" name="month" value={filters.month} onChange={handleFilterChange} /></div></GlassPanel>)}<GlassPanel><div className="overflow-x-auto"><table className="min-w-full"><thead className="border-b border-gray-200 dark:border-white/10"><tr>{['Nome', 'Status', 'Plano Ativo', 'Vigência Ativa'].map(h => <th key={h} scope="col" className="px-6 py-4 text-left text-sm font-semibold text-gray-500 dark:text-gray-300 tracking-wider">{h}</th>)}</tr></thead><tbody className="divide-y divide-gray-200 dark:divide-white/10">{renderTableRows()}</tbody></table></div></GlassPanel>{totalPages > 1 && (<div className="flex justify-center items-center gap-2 mt-6"><Button onClick={() => setCurrentPage(p => p - 1)} disabled={currentPage === 1} variant="outline">Anterior</Button><span className="text-gray-700 dark:text-gray-300">Página {currentPage} de {totalPages}</span><Button onClick={() => setCurrentPage(p => p + 1)} disabled={currentPage === totalPages} variant="outline">Próxima</Button></div>)}</div>); };
+function ClientsList({ onClientSelect, onAddClient }) {
+    const { clients, loading, operators } = useData();
+    const [searchTerm, setSearchTerm] = useState('');
+    const [filters, setFilters] = useState({ status: '', operator: '', month: '' });
+    const [showFilters, setShowFilters] = useState(false);
+    const [currentPage, setCurrentPage] = useState(1);
+    const itemsPerPage = 10;
+    const handleFilterChange = (e) => { setCurrentPage(1); setFilters(prev => ({ ...prev, [e.target.name]: e.target.value })); };
+    const filteredClients = useMemo(() => {
+        return clients
+            .filter(client => {
+                const searchMatch = (`${client?.general?.companyName || ''} ${client?.general?.holderName || ''} ${client?.general?.email || ''}`).toLowerCase().includes(searchTerm.toLowerCase());
+                const statusMatch = filters.status ? client?.general?.status === filters.status : true;
+                const operatorMatch = filters.operator ? (client?.contracts || []).some(c => c.planOperator === filters.operator) : true;
+                const monthMatch = filters.month ? (client?.contracts || []).some(c => c.effectiveDate?.startsWith(filters.month)) : true;
+                return searchMatch && statusMatch && operatorMatch && monthMatch;
+            })
+            .sort((a, b) => (a.general?.companyName || a.general?.holderName || '').localeCompare(b.general?.companyName || b.general?.holderName || ''));
+    }, [clients, searchTerm, filters]);
+    const totalPages = Math.ceil(filteredClients.length / itemsPerPage);
+    const currentClients = filteredClients.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+    const renderTableRows = () => { if (loading && clients.length === 0) return Array.from({ length: 5 }).map((_, i) => <SkeletonRow key={i} />); if (currentClients.length > 0) { return currentClients.map((client) => { const activeContract = client.contracts?.find(c => c.status === 'ativo'); return (<tr key={client.id} onClick={() => onClientSelect(client.id)} className="hover:bg-gray-100/50 dark:hover:bg-cyan-500/5 cursor-pointer transition-colors duration-200"><td className="px-6 py-4 whitespace-nowrap"><div className="font-medium text-gray-900 dark:text-white">{client?.general?.companyName || client?.general?.holderName}</div><div className="text-sm text-gray-500 dark:text-gray-400">{client?.general?.email}</div></td><td className="px-6 py-4 whitespace-nowrap"><span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${client?.general?.status === 'Ativo' ? 'bg-green-100 text-green-800 dark:bg-green-500/20 dark:text-green-400' : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-500/20 dark:text-yellow-400'}`}>{client?.general?.status}</span></td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">{activeContract?.planOperator || 'N/A'}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{formatDate(activeContract?.effectiveDate) || 'N/A'}</td></tr>) }); } return <tr><td colSpan="4"><EmptyState title="Nenhum Cliente Encontrado" message="Ajuste os filtros ou adicione um novo cliente." actionText="Adicionar Novo Cliente" onAction={onAddClient} /></td></tr>; };
+    return (<div className="p-4 sm:p-6 lg:p-8"><div className="flex justify-between items-center mb-6"><h2 className="text-3xl font-bold text-gray-900 dark:text-white">Clientes</h2><div className="flex gap-2"><Button variant="outline" onClick={() => setShowFilters(!showFilters)}><FilterIcon className="h-4 w-4 mr-2" /> Filtros</Button><Button onClick={onAddClient}><PlusCircleIcon className="h-5 w-5 mr-2" /> Adicionar Cliente</Button></div></div>{showFilters && (<GlassPanel className="p-4 mb-6"><div className="grid grid-cols-1 md:grid-cols-4 gap-4"><Input placeholder="Procurar..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} /><Select name="status" value={filters.status} onChange={handleFilterChange}><option value="">Todos Status</option><option>Ativo</option><option>Inativo</option></Select><Select name="operator" value={filters.operator} onChange={handleFilterChange}><option value="">Todas Operadoras</option>{operators.map(op => <option key={op.id} value={op.name}>{op.name}</option>)}</Select><Input type="month" name="month" value={filters.month} onChange={handleFilterChange} /></div></GlassPanel>)}<GlassPanel><div className="overflow-x-auto"><table className="min-w-full"><thead className="border-b border-gray-200 dark:border-white/10"><tr>{['Nome', 'Status', 'Plano Ativo', 'Vigência Ativa'].map(h => <th key={h} scope="col" className="px-6 py-4 text-left text-sm font-semibold text-gray-500 dark:text-gray-300 tracking-wider">{h}</th>)}</tr></thead><tbody className="divide-y divide-gray-200 dark:divide-white/10">{renderTableRows()}</tbody></table></div></GlassPanel>{totalPages > 1 && (<div className="flex justify-center items-center gap-2 mt-6"><Button onClick={() => setCurrentPage(p => p - 1)} disabled={currentPage === 1} variant="outline">Anterior</Button><span className="text-gray-700 dark:text-gray-300">Página {currentPage} de {totalPages}</span><Button onClick={() => setCurrentPage(p => p + 1)} disabled={currentPage === totalPages} variant="outline">Próxima</Button></div>)}</div>);
+};
+
 function ClientDetails({ client, onBack, onEdit }) {
     const { toast } = useToast();
     const { deleteClient } = useData();
     const confirm = useConfirm();
-    const [activeTab, setActiveTab] = useState('overview');
+    const [activeTab, setActiveTab] = useState('general'); // MUDANÇA AQUI
+    const { preferences } = usePreferences();
 
     if (!client) return null;
 
@@ -1660,30 +1910,36 @@ function ClientDetails({ client, onBack, onEdit }) {
     };
     
     const OverviewTab = ({ client }) => {
-    return (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-6">
-            {/* --- LINHA 1 (ORDEM AJUSTADA) --- */}
+    return (<>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-1 mb-6">
             <DetailItem label="Nome Empresa" value={client?.general?.companyName} />
-            <DetailItem label="Tipo de Contrato" value={client?.general?.clientType} />
+            <DetailItem label="Tipo de Plano" value={client?.general?.clientType} />
             <DetailItem label="Status" value={client?.general?.status} />
-
-            {/* --- LINHA 2 --- */}
             <DetailItem label="CNPJ" value={client?.general?.cnpj} />
             <DetailItem label="Nome do Responsável" value={client?.general?.responsibleName} />
             <DetailItem label="CPF do Responsável" value={client?.general?.responsibleCpf} />
-
-            {/* --- LINHA 3 --- */}
+        </div>
+        <h4 className={cn("text-lg font-semibold text-cyan-600 dark:text-cyan-400/80 border-b border-gray-200 dark:border-white/10 pb-2 mb-4", preferences.uppercaseMode && "uppercase")}>Endereço</h4>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-1 mb-6">
+            <DetailItem label="CEP" value={client?.address?.cep} />
+            <DetailItem label="Logradouro" value={client?.address?.street} />
+            <DetailItem label="Complemento" value={client?.address?.complement} />
+            <DetailItem label="Bairro" value={client?.address?.neighborhood} />
+            <DetailItem label="Cidade" value={client?.address?.city} />
+            <DetailItem label="Estado" value={client?.address?.state} />
+        </div>
+        <h4 className={cn("text-lg font-semibold text-cyan-600 dark:text-cyan-400/80 border-b border-gray-200 dark:border-white/10 pb-2 mb-4", preferences.uppercaseMode && "uppercase")}>Contato</h4>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-1">
             <DetailItem label="Responsável" value={client?.general?.responsibleStatus} />
             <DetailItem label="Email Responsável" value={client?.general?.email} />
             <DetailItem label="Telefone Responsável" value={client?.general?.holderCpf} />
-
-            {/* --- LINHA 4 --- */}
             <DetailItem label="Nome do Contato" value={client?.general?.phone} />
             <DetailItem label="Cargo do Contato" value={client?.general?.contactRole} />
             <DetailItem label="Telefone do Contato" value={client?.general?.contactPhone} />
         </div>
-    );
+    </>);
   };
+
     return (
         <div className="p-4 sm:p-6 lg:p-8">
             <div className="flex justify-between items-start mb-6 gap-4">
@@ -1699,15 +1955,16 @@ function ClientDetails({ client, onBack, onEdit }) {
             <GlassPanel className="p-6">
                 <Tabs value={activeTab} onValueChange={setActiveTab}>
                     <TabsList>
-                        <TabsTrigger value="overview">Visão Geral</TabsTrigger>
-                        <TabsTrigger value="contract">Contratos</TabsTrigger>
+                        {/* MUDANÇA NOS VALUES ABAIXO */}
+                        <TabsTrigger value="general">Visão Geral</TabsTrigger>
+                        <TabsTrigger value="contracts">Contratos</TabsTrigger>
                         <TabsTrigger value="beneficiaries">Beneficiários</TabsTrigger>
                         <TabsTrigger value="history">Histórico</TabsTrigger>
                         <TabsTrigger value="internal">Interno</TabsTrigger>
                         <TabsTrigger value="cortex">Córtex AI</TabsTrigger>
                     </TabsList>
-                    <TabsContent value="overview"><OverviewTab client={client} /></TabsContent>
-                    <TabsContent value="contract"><ContractManager client={client} onBack={onBack} onEdit={onEdit} /></TabsContent>
+                    <TabsContent value="general"><OverviewTab client={client} /></TabsContent>
+                    <TabsContent value="contracts"><ContractManager client={client} onBack={onBack} onEdit={onEdit} /></TabsContent>
                     <TabsContent value="beneficiaries"><BeneficiariesTab client={client} /></TabsContent>
                     <TabsContent value="history"><HistoryTab client={client} /></TabsContent>
                     <TabsContent value="internal"><InternalTab client={client} /></TabsContent>
@@ -1717,6 +1974,7 @@ function ClientDetails({ client, onBack, onEdit }) {
         </div>
     );
 };
+
 function CorporatePage({ onNavigate }) {
     const { users, operators, addOperator, updateOperator, deleteOperator, companyProfile, updateCompanyProfile, partners, addPartner, deletePartner, clients, leads, tasks } = useData();
     const { user, addUser, deleteUser } = useAuth();
@@ -1728,6 +1986,10 @@ function CorporatePage({ onNavigate }) {
     const [editingOperator, setEditingOperator] = useState(null);
     const [companyData, setCompanyData] = useState({});
     const [expandedOperatorId, setExpandedOperatorId] = useState(null);
+
+    const sortedUsers = useMemo(() => [...users].sort((a,b) => (a.name || '').localeCompare(b.name || '')), [users]);
+    const sortedPartners = useMemo(() => [...partners].sort((a,b) => (a.name || '').localeCompare(b.name || '')), [partners]);
+    const sortedOperators = useMemo(() => [...operators].sort((a,b) => (a.name || '').localeCompare(b.name || '')), [operators]);
 
     useEffect(() => { setCompanyData(companyProfile || {}); }, [companyProfile]);
     
@@ -1771,7 +2033,7 @@ function CorporatePage({ onNavigate }) {
                 <TabsContent value="team">
                     <div className="flex justify-between items-center mb-4"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80">Usuários do Sistema</h3><Button onClick={() => setUserModalOpen(true)}><PlusCircleIcon className="h-4 w-4 mr-2" />Adicionar Usuário</Button></div>
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                        {users.map(u => {
+                        {sortedUsers.map(u => {
                             const clientCount = clients.filter(c => c.internal?.brokerId === u.id).length;
                             const leadCount = leads.filter(l => l.ownerId === u.id).length;
                             const taskCount = tasks.filter(t => t.assignedTo === u.id && t.status !== 'Concluída').length;
@@ -1800,16 +2062,16 @@ function CorporatePage({ onNavigate }) {
 
                 <TabsContent value="partners">
                     <div className="flex justify-between items-center mb-4"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80">Parceiros Comerciais (sem acesso)</h3><Button onClick={() => setPartnerModalOpen(true)}><PlusCircleIcon className="h-4 w-4 mr-2" />Adicionar Parceiro</Button></div>
-                     <div className="bg-gray-100 dark:bg-black/20 rounded-lg p-4 space-y-3">
-                        {partners.length === 0 && <p className="text-sm text-center text-gray-500 py-4">Nenhum parceiro externo cadastrado.</p>}
-                        {partners.map(p => (<div key={p.id} className="flex justify-between items-center bg-gray-200/70 dark:bg-gray-800/70 p-3 rounded-md"><div><p className="font-medium text-gray-900 dark:text-white">{p.name}</p><p className="text-sm text-gray-600 dark:text-gray-400">{p.email || 'Sem email'} - <span className="font-semibold">{p.type}</span></p></div><Button variant="ghost" size="icon" className="h-8 w-8 text-red-500/70 hover:text-red-400" onClick={() => handleDeletePartner(p)}><Trash2Icon className="h-4 w-4" /></Button></div>))}
+                    <div className="bg-gray-100 dark:bg-black/20 rounded-lg p-4 space-y-3">
+                        {sortedPartners.length === 0 && <p className="text-sm text-center text-gray-500 py-4">Nenhum parceiro externo cadastrado.</p>}
+                        {sortedPartners.map(p => (<div key={p.id} className="flex justify-between items-center bg-gray-200/70 dark:bg-gray-800/70 p-3 rounded-md"><div><p className="font-medium text-gray-900 dark:text-white">{p.name}</p><p className="text-sm text-gray-600 dark:text-gray-400">{p.email || 'Sem email'} - <span className="font-semibold">{p.type}</span></p></div><Button variant="ghost" size="icon" className="h-8 w-8 text-red-500/70 hover:text-red-400" onClick={() => handleDeletePartner(p)}><Trash2Icon className="h-4 w-4" /></Button></div>))}
                     </div>
                 </TabsContent>
                 
                 <TabsContent value="operators">
                     <div className="flex justify-between items-center mb-4"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80">Operadoras</h3><Button onClick={() => handleOpenOperatorModal()}><PlusCircleIcon className="h-4 w-4 mr-2" />Adicionar</Button></div>
                     <div className="bg-gray-100 dark:bg-black/20 rounded-lg p-4 space-y-2">
-                        {operators.map(op => (
+                        {sortedOperators.map(op => (
                             <div key={op.id}>
                                 <div className="flex justify-between items-center bg-gray-200/70 dark:bg-gray-800/70 p-3 rounded-md">
                                     <p className="font-medium text-gray-900 dark:text-white flex-grow cursor-pointer" onClick={() => setExpandedOperatorId(prev => prev === op.id ? null : op.id)}>{op.name}</p>
@@ -1841,7 +2103,7 @@ function CorporatePage({ onNavigate }) {
                         <div><Label>Endereço</Label><Input name="address" value={companyData.address || ''} onChange={handleCompanyDataChange} /></div>
                         <div><Label>Logo da Empresa (URL)</Label><Input name="logoUrl" value={companyData.logoUrl || ''} onChange={handleCompanyDataChange} placeholder="https://site.com/logo.png"/></div>
                     </FormSection>
-                     <FormSection title="Metas da Empresa (Opcional)">
+                    <FormSection title="Metas da Empresa (Opcional)">
                         <div><Label>Meta de Faturamento Mensal</Label><Input type="number" name="goalRevenue" value={companyData.goalRevenue || ''} onChange={handleCompanyDataChange} /></div>
                         <div><Label>Meta de Novos Clientes Mensal</Label><Input type="number" name="goalClients" value={companyData.goalClients || ''} onChange={handleCompanyDataChange} /></div>
                     </FormSection>
@@ -1853,8 +2115,10 @@ function CorporatePage({ onNavigate }) {
         <AddCollaboratorModal isOpen={isUserModalOpen} onClose={() => setUserModalOpen(false)} onSave={handleAddUser} />
         <AddOperatorModal isOpen={isOperatorModalOpen} onClose={() => { setOperatorModalOpen(false); setEditingOperator(null); }} onSave={handleSaveOperator} operator={editingOperator} />
         <AddPartnerModal isOpen={isPartnerModalOpen} onClose={() => setPartnerModalOpen(false)} onSave={handleAddPartner} />
-    </div>);
+    </div>
+    );
 };
+
 const MiniCalendarPopover = ({ isOpen, onClose, onSelectDate, targetElement }) => {
     const [currentDate, setCurrentDate] = useState(new Date());
     const popoverRef = useRef(null);
@@ -2123,7 +2387,94 @@ function CalendarPage({ onNavigate }) {
     );
 };
 
-function ProfilePage() { const { user, updateUserProfile, updateUserPassword } = useAuth(); const { toast } = useToast(); const [name, setName] = useState(user?.name || ''); const [currentPassword, setCurrentPassword] = useState(''); const [newPassword, setNewPassword] = useState(''); const [confirmPassword, setConfirmPassword] = useState(''); useEffect(() => { if (user && user.name !== 'Usuário Incompleto') { setName(user.name); } }, [user]); const handleProfileUpdate = async (e) => { e.preventDefault(); const success = await updateUserProfile(user.uid, { name }); toast({ title: success ? "Sucesso" : "Erro", description: success ? "Nome atualizado." : "Não foi possível atualizar.", variant: success ? 'default' : 'destructive' }); }; const handlePasswordUpdate = async (e) => { e.preventDefault(); if (!currentPassword) { toast({ title: "Erro", description: "Insira sua senha atual.", variant: 'destructive' }); return; } if (newPassword !== confirmPassword) { toast({ title: "Erro", description: "As senhas não coincidem.", variant: 'destructive' }); return; } if (newPassword.length < 6) { toast({ title: "Erro", description: "A nova senha deve ter no mínimo 6 caracteres.", variant: 'destructive' }); return; } const result = await updateUserPassword(currentPassword, newPassword); if (result === true) { toast({ title: "Sucesso", description: "Senha atualizada." }); setCurrentPassword(''); setNewPassword(''); setConfirmPassword(''); } else { let errorMessage = "Não foi possível atualizar."; if (result === 'auth/wrong-password') errorMessage = "A senha atual está incorreta."; else if (result === 'auth/requires-recent-login') errorMessage = "Requer autenticação recente. Faça logout e login novamente."; toast({ title: "Erro", description: errorMessage, variant: 'destructive' }); } }; return (<div className="p-4 sm:p-6 lg:p-8"><h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-6">Meu Perfil</h2><div className="grid grid-cols-1 lg:grid-cols-2 gap-8"><GlassPanel className="p-6"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80 mb-6">Informações Pessoais</h3><form onSubmit={handleProfileUpdate} className="space-y-4"><div><Label>Foto</Label><div className="mt-2 flex items-center gap-4"><div className="w-20 h-20 rounded-full bg-violet-100 dark:bg-violet-900 flex items-center justify-center text-3xl font-bold text-violet-600 dark:text-violet-300 border-2 border-violet-300 dark:border-violet-700">{user?.name?.[0]}</div><Button type="button" variant="outline" disabled>Alterar Foto</Button></div></div><div><Label>Nome Completo</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div><div><Label>Email</Label><Input value={user?.email || ''} disabled /></div><div className="flex justify-end"><Button type="submit">Salvar</Button></div></form></GlassPanel><GlassPanel className="p-6"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80 mb-6">Alterar Senha</h3><form onSubmit={handlePasswordUpdate} className="space-y-4"><div><Label>Senha Atual</Label><Input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} required /></div><div><Label>Nova Senha</Label><Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required /></div><div><Label>Confirmar Nova Senha</Label><Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required /></div><div className="flex justify-end"><Button type="submit">Alterar Senha</Button></div></form></GlassPanel></div></div>); }
+function ProfilePage() {
+    const { user, updateUserProfile, updateUserPassword } = useAuth();
+    const { preferences, updatePreferences } = usePreferences();
+    const { toast } = useToast();
+    const [name, setName] = useState(user?.name || '');
+    const [currentPassword, setCurrentPassword] = useState('');
+    const [newPassword, setNewPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
+
+    useEffect(() => {
+        if (user && user.name !== 'Usuário Incompleto') {
+            setName(user.name);
+        }
+    }, [user]);
+
+    const handleProfileUpdate = async (e) => {
+        e.preventDefault();
+        const success = await updateUserProfile(user.uid, { name });
+        toast({ title: success ? "Sucesso" : "Erro", description: success ? "Nome atualizado." : "Não foi possível atualizar.", variant: success ? 'default' : 'destructive' });
+    };
+
+    const handlePasswordUpdate = async (e) => {
+        e.preventDefault();
+        if (!currentPassword) { toast({ title: "Erro", description: "Insira sua senha atual.", variant: 'destructive' }); return; }
+        if (newPassword !== confirmPassword) { toast({ title: "Erro", description: "As senhas não coincidem.", variant: 'destructive' }); return; }
+        if (newPassword.length < 6) { toast({ title: "Erro", description: "A nova senha deve ter no mínimo 6 caracteres.", variant: 'destructive' }); return; }
+        const result = await updateUserPassword(currentPassword, newPassword);
+        if (result === true) {
+            toast({ title: "Sucesso", description: "Senha atualizada." });
+            setCurrentPassword(''); setNewPassword(''); setConfirmPassword('');
+        } else {
+            let errorMessage = "Não foi possível atualizar.";
+            if (result === 'auth/wrong-password') errorMessage = "A senha atual está incorreta.";
+            else if (result === 'auth/requires-recent-login') errorMessage = "Requer autenticação recente. Faça logout e login novamente.";
+            toast({ title: "Erro", description: errorMessage, variant: 'destructive' });
+        }
+    };
+
+    const handlePreferenceChange = async (key, value) => {
+        const success = await updatePreferences({ [key]: value });
+        if (!success) {
+            toast({ title: "Erro", description: "Não foi possível salvar a preferência.", variant: 'destructive' });
+        }
+    };
+
+    return (
+    <div className={cn("p-4 sm:p-6 lg:p-8", preferences.uppercaseMode && "uppercase")}>
+        <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-6">Meu Perfil</h2>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <GlassPanel className="p-6">
+                <h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80 mb-6">Informações Pessoais</h3>
+                <form onSubmit={handleProfileUpdate} className="space-y-4">
+                    <div><Label>Nome Completo</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div>
+                    <div><Label>Email</Label><Input value={user?.email || ''} disabled /></div>
+                    <div className="flex justify-end"><Button type="submit">Salvar Nome</Button></div>
+                </form>
+            </GlassPanel>
+            <GlassPanel className="p-6">
+                <h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80 mb-6">Alterar Senha</h3>
+                <form onSubmit={handlePasswordUpdate} className="space-y-4">
+                    <div><Label>Senha Atual</Label><Input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} required /></div>
+                    <div><Label>Nova Senha</Label><Input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} required /></div>
+                    <div><Label>Confirmar Nova Senha</Label><Input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required /></div>
+                    <div className="flex justify-end"><Button type="submit">Alterar Senha</Button></div>
+                </form>
+            </GlassPanel>
+            <GlassPanel className="p-6 lg:col-span-2">
+                 <h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80 mb-6">Preferências de Interface</h3>
+                 <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <Label>Modo Contorno</Label>
+                            <p className="text-sm text-gray-500 dark:text-gray-400">Exibe uma borda em todos os campos de informação para melhor visualização.</p>
+                        </div>
+                        <Switch checked={preferences.contourMode} onChange={(value) => handlePreferenceChange('contourMode', value)} />
+                    </div>
+                    <div className="flex items-center justify-between">
+                        <div>
+                            <Label>Modo Maiúsculas</Label>
+                            <p className="text-sm text-gray-500 dark:text-gray-400">Exibe todos os textos e campos do sistema em CAIXA ALTA.</p>
+                        </div>
+                        <Switch checked={preferences.uppercaseMode} onChange={(value) => handlePreferenceChange('uppercaseMode', value)} />
+                    </div>
+                 </div>
+            </GlassPanel>
+        </div>
+    </div>);
+}
 
 const ArchivedLeadsModal = ({ isOpen, onClose, allLeads, onUnarchive }) => {
     const archivedLeads = allLeads.filter(l => l.archived).sort((a, b) => (b.archivedAt?.toDate() || 0) - (a.archivedAt?.toDate() || 0));
@@ -2702,8 +3053,7 @@ function MainApp() {
     const data = useData();
     const { toast } = useToast();
     const [itemDetails, setItemDetails] = useState(null);
-    
-    // Central de controle dos Modais
+    const { preferences } = usePreferences();
     const [taskModalState, setTaskModalState] = useState({ isOpen: false, task: null });
 
     const handleNavigate = (targetPage, itemId = null, options = {}) => {
@@ -2757,36 +3107,18 @@ function MainApp() {
         }
     };
 
-    // O NOVO MOTOR DE EXECUÇÃO
     const executeCortexPlan = async (plan) => {
-        for (const step of plan) {
-            const { action, payload } = step;
-            switch(action) {
-                case 'navigate':
-                    handleNavigate(payload.page);
-                    break;
-                case 'create_task':
-                    setTaskModalState({
-                        isOpen: true,
-                        task: { 
-                            title: payload.title || '',
-                            description: payload.description || '',
-                            dueDate: payload.dueDate || '',
-                            assignedTo: payload.assignedTo || '', // Agora recebe o ID diretamente
-                            priority: 'Média',
-                            status: 'Pendente'
-                        }
-                    });
-                    break;
-                // ... outros cases como 'update_lead_status', 'add_note'
-                default:
-                    toast({ title: "Ação não reconhecida", description: `Córtex sugeriu: ${action}`, variant: 'destructive' });
-            }
-        }
-    };
+        for (const step of plan) {
+            const { action, payload } = step;
+            switch(action) {
+                case 'navigate': handleNavigate(payload.page); break;
+                case 'create_task': setTaskModalState({ isOpen: true, task: { title: payload.title || '', description: payload.description || '', dueDate: payload.dueDate || '', assignedTo: payload.assignedTo || '', priority: 'Média', status: 'Pendente' } }); break;
+                default: toast({ title: "Ação não reconhecida", description: `Córtex sugeriu: ${action}`, variant: 'destructive' });
+            }
+        }
+    };
 
     const renderContent = () => {
-        // Lógica antiga de 'add-task-from-lead' foi simplificada e agora é controlada pelo Córtex
         switch (page) {
             case 'dashboard': return <DashboardPage onNavigate={handleNavigate} />;
             case 'leads': return <LeadsPage onNavigate={handleNavigate} />;
@@ -2809,29 +3141,17 @@ function MainApp() {
         <div className="min-h-screen bg-gray-50 dark:bg-[#0D1117] text-gray-800 dark:text-gray-200 font-sans">
             <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap'); body { font-family: 'Inter', sans-serif; } .prose { color: #374151; } .dark .prose-invert { color: #d1d5db; } .dark .prose ul { list-style-type: disc; padding-left: 1.5rem; } .dark .prose li { margin-top: 0.25em; margin-bottom: 0.25em; } .cortex-active { border: 1px solid rgba(192, 38, 211, 0.5); box-shadow: 0 0 15px rgba(192, 38, 211, 0.3); animation: pulse-violet 2.5s infinite; } @keyframes pulse-violet { 0% { box-shadow: 0 0 10px rgba(192, 38, 211, 0.2); } 50% { box-shadow: 0 0 25px rgba(192, 38, 211, 0.5); } 100% { box-shadow: 0 0 10px rgba(192, 38, 211, 0.2); } } ::-webkit-scrollbar { width: 8px; height: 8px; } ::-webkit-scrollbar-track { background: #f1f5f9; } .dark ::-webkit-scrollbar-track { background: #0D1117; } ::-webkit-scrollbar-thumb { background: #a855f7; border-radius: 4px; } .dark ::-webkit-scrollbar-thumb { background: #C026D3; } ::-webkit-scrollbar-thumb:hover { background: #9333ea; } .dark ::-webkit-scrollbar-thumb:hover { background: #a31db1; } select option { background: white !important; color: #1f2937 !important; } .dark select option { background: #161b22 !important; color: #e5e7eb !important; }`}</style>
             <BoletoTaskManager />
-            <CortexCommand 
-                isOpen={isCommandPaletteOpen} 
-                setIsOpen={setCommandPaletteOpen} 
-                onNavigate={handleNavigate}
-                onExecutePlan={executeCortexPlan}
-            />
+            <CortexCommand isOpen={isCommandPaletteOpen} setIsOpen={setCommandPaletteOpen} onNavigate={handleNavigate} onExecutePlan={executeCortexPlan} />
             <Sidebar onNavigate={handleNavigate} currentPage={page} isSidebarOpen={isSidebarOpen} />
             <div className="lg:pl-64 transition-all duration-300">
                 <Header onToggleSidebar={() => setSidebarOpen(!isSidebarOpen)} onOpenCommandPalette={() => setCommandPaletteOpen(true)} />
-                <main className="relative">{renderContent()}</main>
+                <main className={cn("relative", preferences.uppercaseMode && "uppercase")}>{renderContent()}</main>
             </div>
             {isSidebarOpen && <div onClick={() => setSidebarOpen(false)} className="fixed inset-0 bg-black/60 z-30 lg:hidden"></div>}
-            
-            <TaskModal 
-                isOpen={taskModalState.isOpen} 
-                onClose={() => setTaskModalState({ isOpen: false, task: null })} 
-                onSave={handleSaveTask} 
-                task={taskModalState.task} 
-            />
+            <TaskModal isOpen={taskModalState.isOpen} onClose={() => setTaskModalState({ isOpen: false, task: null })} onSave={handleSaveTask} task={taskModalState.task} />
         </div>
     );
 }
-    
     const CortexCommand = ({ isOpen, setIsOpen, onNavigate, onExecutePlan }) => {
     const { user } = useAuth();
     const { clients, leads, tasks, users, updateTask } = useData();
@@ -3099,7 +3419,9 @@ function App() {
                 <AuthProvider>
                     <DataProvider>
                         <ConfirmProvider>
-                            <MainLoader />
+                            <PreferencesProvider>
+                                <MainLoader />
+                            </PreferencesProvider>
                         </ConfirmProvider>
                     </DataProvider>
                 </AuthProvider>
@@ -3107,5 +3429,4 @@ function App() {
         </ThemeProvider>
     );
 }
-
 export default App;

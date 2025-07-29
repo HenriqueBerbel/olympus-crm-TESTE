@@ -1532,7 +1532,101 @@ const AddOperatorModal = ({ isOpen, onClose, onSave, operator }) => {
         </Modal>
     );
 };
-const TaskModal = ({ isOpen, onClose, onSave, task }) => { const { users, clients, leads } = useData(); const [formState, setFormState] = useState({}); useEffect(() => { setFormState(task ? task : { title: '', description: '', assignedTo: '', dueDate: '', priority: 'Média', linkedToId: '', linkedToType: '', status: 'Pendente' }); }, [task, isOpen]); const handleChange = (e) => setFormState(p => ({ ...p, [e.target.name]: e.target.value })); const handleLinkChange = (e) => { const [type, id] = e.target.value.split('-'); setFormState(p => ({ ...p, linkedToType: type, linkedToId: id })); }; const handleSubmit = (e) => { e.preventDefault(); onSave(formState); }; const linkedValue = formState.linkedToType && formState.linkedToId ? `${formState.linkedToType}-${formState.linkedToId}` : ''; return (<Modal isOpen={isOpen} onClose={onClose} title={task ? "Editar Tarefa" : "Adicionar Nova Tarefa"}><form onSubmit={handleSubmit} className="space-y-4"><div><Label>Título</Label><Input name="title" value={formState.title || ''} onChange={handleChange} required /></div><div><Label>Descrição</Label><Textarea name="description" value={formState.description || ''} onChange={handleChange} rows={3} /></div><div className="grid grid-cols-1 md:grid-cols-2 gap-4"><div><Label>Responsável</Label><Select name="assignedTo" value={formState.assignedTo || ''} onChange={handleChange}><option value="">Ninguém</option>{users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></div><div><Label>Data de Vencimento</Label><DateField name="dueDate" value={formState.dueDate || ''} onChange={handleChange} /></div></div><div><Label>Prioridade</Label><Select name="priority" value={formState.priority || 'Média'} onChange={handleChange}><option>Baixa</option><option>Média</option><option>Alta</option></Select></div><div><Label>Vincular a Cliente/Lead</Label><Select value={linkedValue} onChange={handleLinkChange}><option value="">Nenhum</option><optgroup label="Clientes">{clients.map(c => <option key={c.id} value={`client-${c.id}`}>{c.general?.holderName || c.general?.companyName}</option>)}</optgroup><optgroup label="Leads">{leads.map(l => <option key={l.id} value={`lead-${l.id}`}>{l.name}</option>)}</optgroup></Select></div><div className="flex justify-end gap-4 pt-4"><Button type="button" variant="outline" onClick={onClose}>Cancelar</Button><Button type="submit">Salvar Tarefa</Button></div></form></Modal>); };
+const TaskModal = ({ isOpen, onClose, onSave, task }) => {
+    const { users, clients, leads } = useData();
+    const [formState, setFormState] = useState({});
+
+    // [NOVO] Definindo as cores disponíveis
+    const colorOptions = ['#F59E0B', '#10B981', '#3B82F6', '#8B5CF6', '#EF4444', '#6B7280'];
+
+    useEffect(() => {
+        setFormState(
+            task 
+            ? { ...task }
+            // [ALTERAÇÃO] Define uma cor padrão para novas tarefas
+            : { title: '', description: '', assignedTo: '', dueDate: '', priority: 'Média', linkedToId: '', linkedToType: '', status: 'Pendente', color: '#6B7280' }
+        );
+    }, [task, isOpen]);
+    
+    const handleChange = (e) => setFormState(p => ({ ...p, [e.target.name]: e.target.value }));
+    const handleLinkChange = (e) => {
+        const [type, id] = e.target.value.split('-');
+        setFormState(p => ({ ...p, linkedToType: type, linkedToId: id }));
+    };
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        onSave(formState);
+    };
+
+    const linkedValue = formState.linkedToType && formState.linkedToId ? `${formState.linkedToType}-${formState.linkedToId}` : '';
+
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title={task ? "Editar Tarefa" : "Adicionar Nova Tarefa"}>
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <div>
+                    <Label>Título</Label>
+                    <Input name="title" value={formState.title || ''} onChange={handleChange} required />
+                </div>
+                <div>
+                    <Label>Descrição</Label>
+                    <Textarea name="description" value={formState.description || ''} onChange={handleChange} rows={3} />
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <Label>Responsável</Label>
+                        <Select name="assignedTo" value={formState.assignedTo || ''} onChange={handleChange}>
+                            <option value="">Ninguém</option>
+                            {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                        </Select>
+                    </div>
+                    <div>
+                        <Label>Data de Vencimento</Label>
+                        <DateField name="dueDate" value={formState.dueDate || ''} onChange={handleChange} />
+                    </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <Label>Prioridade</Label>
+                        <Select name="priority" value={formState.priority || 'Média'} onChange={handleChange}>
+                            <option>Baixa</option><option>Média</option><option>Alta</option>
+                        </Select>
+                    </div>
+                    {/* [NOVO] Seletor de Cores */}
+                    <div>
+                        <Label>Cor do Card</Label>
+                        <div className="flex gap-3 mt-2">
+                            {colorOptions.map(color => (
+                                <button 
+                                    key={color} 
+                                    type="button" 
+                                    onClick={() => setFormState(p => ({ ...p, color: color }))} 
+                                    style={{ backgroundColor: color }} 
+                                    className={cn(
+                                        "w-8 h-8 rounded-full transition-all hover:scale-110", 
+                                        formState.color === color && 'ring-2 ring-offset-2 ring-cyan-500 dark:ring-offset-gray-800'
+                                    )}
+                                />
+                            ))}
+                        </div>
+                    </div>
+                </div>
+                <div>
+                    <Label>Vincular a Cliente/Lead</Label>
+                    <Select value={linkedValue} onChange={handleLinkChange}>
+                        <option value="">Nenhum</option>
+                        <optgroup label="Clientes">{clients.map(c => <option key={c.id} value={`client-${c.id}`}>{c.general?.companyName || c.general?.holderName}</option>)}</optgroup>
+                        <optgroup label="Leads">{leads.map(l => <option key={l.id} value={`lead-${l.id}`}>{l.name}</option>)}</optgroup>
+                    </Select>
+                </div>
+                <div className="flex justify-end gap-4 pt-4">
+                    <Button type="button" variant="outline" onClick={onClose}>Cancelar</Button>
+                    <Button type="submit">Salvar Tarefa</Button>
+                </div>
+            </form>
+        </Modal>
+    );
+};
+
 const ConfirmModal = ({ isOpen, onClose, onConfirm, title, description }) => { if (!isOpen) return null; return (<Modal isOpen={isOpen} onClose={onClose} title={title || "Confirmar Ação"}><p className="text-gray-700 dark:text-gray-300">{description || "Tem certeza que deseja prosseguir?"}</p><div className="flex justify-end gap-4 mt-6"><Button variant="outline" onClick={onClose}>Cancelar</Button><Button variant="destructive" onClick={onConfirm}>Confirmar</Button></div></Modal>); };
 const ContractModal = ({ isOpen, onClose, onSave, contract, clientType }) => {
     const { operators, users } = useData();
@@ -2941,8 +3035,8 @@ const ArchivedLeadsModal = ({ isOpen, onClose, allLeads, onUnarchive }) => {
     )
 };
 
-const ManageColumnsModal = ({ isOpen, onClose, onSave, columns, boardId }) => {
-    const { addKanbanColumn, deleteKanbanColumn, updateKanbanColumnOrder, logAction } = useData();
+const ManageColumnsModal = ({ isOpen, onClose, onSave, columns, boardId, title, showConversionButton = false, showConclusionButton = false }) => {
+    const { addKanbanColumn, deleteKanbanColumn, updateKanbanColumnOrder, logAction, leads, tasks } = useData();
     const { toast } = useToast();
     const db = getFirestore();
 
@@ -2950,11 +3044,11 @@ const ManageColumnsModal = ({ isOpen, onClose, onSave, columns, boardId }) => {
     const [newColumnTitle, setNewColumnTitle] = useState("");
 
     useEffect(() => {
-        // Inicializa o estado local com as colunas existentes
-        const initializedColumns = columns.map(col => ({
+        const initializedColumns = (columns || []).map(col => ({
             ...col,
             isConversion: col.isConversion || false,
             isArchiveColumn: col.isArchiveColumn || false,
+            isConclusion: col.isConclusion || false, // [NOVO]
         }));
         setLocalColumns(initializedColumns);
     }, [columns, isOpen]);
@@ -2964,11 +3058,16 @@ const ManageColumnsModal = ({ isOpen, onClose, onSave, columns, boardId }) => {
     };
 
     const handleSetConversion = (id) => {
-        setLocalColumns(prev => prev.map(col => ({ ...col, isConversion: col.id === id, isArchiveColumn: col.id === id ? false : col.isArchiveColumn })));
+        setLocalColumns(prev => prev.map(col => ({ ...col, isConversion: col.id === id, isConclusion: false, isArchiveColumn: col.id === id ? false : col.isArchiveColumn })));
+    };
+    
+    // [NOVO] Lógica para a coluna de conclusão
+    const handleSetConclusion = (id) => {
+        setLocalColumns(prev => prev.map(col => ({ ...col, isConclusion: col.id === id, isConversion: false, isArchiveColumn: col.id === id ? false : col.isArchiveColumn })));
     };
 
     const handleSetArchive = (id) => {
-        setLocalColumns(prev => prev.map(col => ({ ...col, isArchiveColumn: col.id === id, isConversion: col.id === id ? false : col.isConversion })));
+        setLocalColumns(prev => prev.map(col => ({ ...col, isArchiveColumn: col.id === id, isConversion: false, isConclusion: false })));
     };
 
     const handleAddNewColumn = () => {
@@ -2978,6 +3077,7 @@ const ManageColumnsModal = ({ isOpen, onClose, onSave, columns, boardId }) => {
             title: newColumnTitle,
             color: '#3B82F6',
             isConversion: false,
+            isConclusion: false,
             isArchiveColumn: false,
             order: localColumns.length,
             boardId: boardId,
@@ -2987,22 +3087,20 @@ const ManageColumnsModal = ({ isOpen, onClose, onSave, columns, boardId }) => {
     };
 
     const handleDelete = async (id, title) => {
-       if (id.startsWith('temp_')) {
+        if (id.startsWith('temp_')) {
             setLocalColumns(prev => prev.filter(col => col.id !== id));
-       } else {
-            const itemsInColumn = boardId === 'leads' ? 
-              (await getDocs(query(collection(db, 'leads'), where('status', '==', title)))).size :
-              (await getDocs(query(collection(db, 'tasks'), where('status', '==', title)))).size;
+        } else {
+            const itemsInColumn = boardId === 'leads' ? leads.filter(l => l.status === title).length : tasks.filter(t => t.status === title).length;
 
             if (itemsInColumn > 0) {
-              toast({ title: "Coluna não está vazia!", description: "Mova os itens para outra coluna antes de excluir.", variant: 'destructive' });
-              return;
+                toast({ title: "Coluna não está vazia!", description: "Mova os itens para outra coluna antes de excluir.", variant: 'destructive' });
+                return;
             }
             if (await deleteKanbanColumn(id)) {
                 setLocalColumns(prev => prev.filter(col => col.id !== id));
                 toast({ title: "Coluna removida" });
             }
-       }
+        }
     };
     
     const handleSave = () => {
@@ -3011,32 +3109,29 @@ const ManageColumnsModal = ({ isOpen, onClose, onSave, columns, boardId }) => {
     };
 
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title="Gerenciar Colunas do Funil">
+        // [ALTERAÇÃO] Título agora é uma prop
+        <Modal isOpen={isOpen} onClose={onClose} title={title}>
             <div className="space-y-4">
-                <p className="text-sm text-gray-500 dark:text-gray-400">Arraste para reordenar. Marque (⚡) para a coluna de conversão e (🗄️) para a de descarte.</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">Arraste para reordenar. Defina as colunas especiais.</p>
                 <div className="space-y-3 max-h-64 overflow-y-auto pr-2">
                     {localColumns.map(col => (
                         <div key={col.id} className="flex items-center gap-3 bg-gray-100 dark:bg-black/20 p-2 rounded-lg">
                             <GripVerticalIcon className="h-5 w-5 text-gray-400 cursor-move" />
                             <Input value={col.title} onChange={(e) => handleTitleChange(col.id, e.target.value)} className="flex-grow"/>
-                            <button
-                                onClick={() => handleSetConversion(col.id)}
-                                title="Marcar como coluna de CONVERSÃO"
-                                className={cn(
-                                    "p-2 rounded-full transition-colors",
-                                    col.isConversion ? "bg-green-500 text-white" : "bg-gray-300 dark:bg-gray-600 hover:bg-green-400"
-                                )}
-                            >
-                                <ZapIcon className={cn("h-4 w-4", col.isConversion && "text-white")} />
-                            </button>
-                            <button
-                                onClick={() => handleSetArchive(col.id)}
-                                title="Marcar como coluna de ARQUIVO/DESCARTE"
-                                className={cn(
-                                    "p-2 rounded-full transition-colors",
-                                    col.isArchiveColumn ? "bg-red-600 text-white" : "bg-gray-300 dark:bg-gray-600 hover:bg-red-500"
-                                )}
-                            >
+                            
+                            {/* [ALTERAÇÃO] Botões condicionais */}
+                            {showConclusionButton && (
+                                <button onClick={() => handleSetConclusion(col.id)} title="Marcar como coluna de CONCLUSÃO" className={cn("p-2 rounded-full transition-colors", col.isConclusion ? "bg-green-500 text-white" : "bg-gray-300 dark:bg-gray-600 hover:bg-green-400")}>
+                                    <CheckSquareIcon className="h-4 w-4" />
+                                </button>
+                            )}
+                            {showConversionButton && (
+                                <button onClick={() => handleSetConversion(col.id)} title="Marcar como coluna de CONVERSÃO" className={cn("p-2 rounded-full transition-colors", col.isConversion ? "bg-green-500 text-white" : "bg-gray-300 dark:bg-gray-600 hover:bg-green-400")}>
+                                    <ZapIcon className={cn("h-4 w-4", col.isConversion && "text-white")} />
+                                </button>
+                            )}
+
+                            <button onClick={() => handleSetArchive(col.id)} title="Marcar como coluna de ARQUIVO/DESCARTE" className={cn("p-2 rounded-full transition-colors", col.isArchiveColumn ? "bg-red-600 text-white" : "bg-gray-300 dark:bg-gray-600 hover:bg-red-500")}>
                                 <ArchiveIcon className="h-4 w-4" />
                             </button>
                             <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500/70" onClick={() => handleDelete(col.id, col.title)}>
@@ -3049,8 +3144,8 @@ const ManageColumnsModal = ({ isOpen, onClose, onSave, columns, boardId }) => {
                 <div className="border-t border-gray-200 dark:border-white/10 pt-4">
                     <h3 className="text-md font-semibold text-gray-800 dark:text-gray-200">Adicionar Nova Coluna</h3>
                     <div className="flex gap-3 mt-2">
-                         <Input value={newColumnTitle} onChange={(e) => setNewColumnTitle(e.target.value)} placeholder="Nome da nova coluna" />
-                         <Button onClick={handleAddNewColumn}>Adicionar</Button>
+                        <Input value={newColumnTitle} onChange={(e) => setNewColumnTitle(e.target.value)} placeholder="Nome da nova coluna" />
+                        <Button onClick={handleAddNewColumn}>Adicionar</Button>
                     </div>
                 </div>
             </div>
@@ -3061,7 +3156,6 @@ const ManageColumnsModal = ({ isOpen, onClose, onSave, columns, boardId }) => {
         </Modal>
     );
 };
-
 function LeadsPage({ onNavigate }) {
     const { leads, updateLead, addLead, leadColumns, addKanbanColumn, deleteKanbanColumn } = useData();
     const { toast } = useToast();
@@ -3215,13 +3309,15 @@ function LeadsPage({ onNavigate }) {
                 </KanbanBoard>
             </GlassPanel>
             <LeadModal isOpen={isLeadModalOpen} onClose={() => setLeadModalOpen(false)} onSave={handleSaveLead} lead={editingLead} />
-            <ManageColumnsModal 
-                isOpen={isManageColumnsModalOpen} 
-                onClose={() => setManageColumnsModalOpen(false)} 
-                onSave={handleSaveColumns}
-                columns={leadColumns}
-                boardId="leads"
-            />
+            <ManageColumnsModal
+    isOpen={isManageColumnsModalOpen}
+    onClose={() => setManageColumnsModalOpen(false)}
+    onSave={handleSaveColumns}
+    columns={leadColumns}
+    boardId="leads"
+    title="Gerenciar Colunas do Funil" // <-- Título Específico
+    showConversionButton={true}        // <-- Mostrar botão de conversão
+/>
             <ArchivedLeadsModal
                 isOpen={isArchiveModalOpen}
                 onClose={() => setArchiveModalOpen(false)}
@@ -3232,29 +3328,199 @@ function LeadsPage({ onNavigate }) {
     );
 }
 function TasksPage() {
-    const { tasks, updateTask, addTask, deleteTask, loading, taskColumns, addKanbanColumn, deleteKanbanColumn } = useData();
+    const { tasks, updateTask, addTask, deleteTask, loading, taskColumns, addKanbanColumn, deleteKanbanColumn, logAction, clients, leads, users } = useData();
     const { toast } = useToast();
     const confirm = useConfirm();
+    const db = getFirestore();
     const [isTaskModalOpen, setTaskModalOpen] = useState(false);
-    const [isColumnModalOpen, setColumnModalOpen] = useState(false);
+    const [isManageColumnsModalOpen, setManageColumnsModalOpen] = useState(false);
     const [editingTask, setEditingTask] = useState(null);
+    const [viewingTask, setViewingTask] = useState(null);
 
-    // Adicione esta verificação. Se as colunas não carregaram ainda, mostra "Carregando..."
+    // ===================================================================================
+    // [NOVO] Todas as 'const' de componentes foram movidas para DENTRO de TasksPage
+    // ===================================================================================
+
+    // Componente para visualizar os detalhes de uma tarefa
+    const TaskViewModal = ({ isOpen, onClose, task }) => {
+        if (!task) return null;
+
+        const assignedUser = users.find(u => u.id === task.assignedTo);
+        const linkedItem = task.linkedToType === 'client' 
+            ? clients.find(c => c.id === task.linkedToId) 
+            : leads.find(l => l.id === task.linkedToId);
+        
+        const linkedItemName = linkedItem 
+            ? linkedItem.general?.companyName || linkedItem.general?.holderName || linkedItem.name 
+            : null;
+
+        const renderDescription = (desc) => { 
+            if (!desc) return <p className="text-gray-500 italic">Nenhuma descrição fornecida.</p>;
+            return (desc || '').split('\n').map((line, i) => <p key={i}>{line}</p>); 
+        };
+
+        return (
+            <Modal isOpen={isOpen} onClose={onClose} title={`Detalhes da Tarefa: ${task.title}`}>
+                <div className="space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-4">
+                        <DetailItem label="Status" value={task.status} />
+                        <DetailItem label="Prioridade">
+                            <Badge variant={
+                                task.priority === 'Alta' ? 'danger' : task.priority === 'Média' ? 'warning' : 'secondary'
+                            }>{task.priority}</Badge>
+                        </DetailItem>
+                        <DetailItem label="Prazo" value={formatDate(task.dueDate)} />
+                        <DetailItem label="Responsável" value={assignedUser?.name} />
+                        {linkedItemName && (
+                             <DetailItem label={`Vinculado a ${task.linkedToType === 'client' ? 'Cliente' : 'Lead'}`} value={linkedItemName} />
+                        )}
+                    </div>
+
+                    <div>
+                        <Label>Descrição</Label>
+                        <div className="mt-1 text-md text-gray-800 dark:text-gray-100 prose dark:prose-invert max-w-none">
+                            {renderDescription(task.description)}
+                        </div>
+                    </div>
+                </div>
+                <div className="flex justify-end mt-8 pt-4 border-t border-gray-200 dark:border-white/10">
+                    <Button variant="outline" onClick={onClose}>Fechar</Button>
+                </div>
+            </Modal>
+        );
+    };
+
+    // Componente que renderiza cada card de tarefa
+    const TaskCard = memo(({ task, onEdit, onDelete, onView }) => {
+        const assignedUser = users.find(u => u.id === task.assignedTo);
+        const linkedItem = task.linkedToType === 'client' 
+            ? clients.find(c => c.id === task.linkedToId) 
+            : leads.find(l => l.id === task.linkedToId);
+        
+        const linkedItemName = linkedItem 
+            ? linkedItem.general?.companyName || linkedItem.general?.holderName || linkedItem.name 
+            : '';
+    
+        return (
+            <GlassPanel 
+                className="p-4 cursor-grab active:cursor-grabbing group border-l-4"
+                style={{ borderColor: task.color || '#6B7280' }}
+                onDoubleClick={() => onView(task)}
+            >
+                <div className="flex justify-between items-start">
+                    <p className="font-bold text-gray-900 dark:text-white flex-grow truncate" title={task.title}>{task.title}</p>
+                    <div className="flex opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); onEdit(task); }}><PencilIcon className="h-4 w-4" /></Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500/70 hover:text-red-400" onClick={(e) => { e.stopPropagation(); onDelete(task); }}><Trash2Icon className="h-4 w-4" /></Button>
+                    </div>
+                </div>
+                
+                {linkedItem && (
+                    <p className="text-xs mt-2 text-cyan-700 dark:text-cyan-400 bg-cyan-100 dark:bg-cyan-900/50 px-2 py-1 rounded-md inline-block">
+                        {task.linkedToType === 'client' ? 'CLIENTE: ' : 'LEAD: '} {linkedItemName}
+                    </p>
+                )}
+                
+                <div className="mt-3 text-xs text-gray-500 flex justify-between items-center">
+                    <span>Prazo: {task.dueDate ? formatDate(task.dueDate) : 'Sem prazo'}</span>
+                    {assignedUser && <div className="w-6 h-6 rounded-full bg-violet-200 dark:bg-violet-900 flex items-center justify-center font-bold text-violet-700 dark:text-violet-300 border-2 border-violet-400 dark:border-violet-700" title={assignedUser.name}>{assignedUser.name?.[0]}</div>}
+                </div>
+            </GlassPanel>
+        );
+    });
+    
+    // Componente para o quadro Kanban
+    const KanbanBoard = ({ columns, onDragEnd, children }) => {
+        const [draggedItem, setDraggedItem] = useState(null);
+        const [dragOverColumn, setDragOverColumn] = useState(null);
+        const handleDragStart = (e, item, sourceColumnId) => { setDraggedItem({ item, sourceColumnId }); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', item.id); };
+        const handleDragOver = (e, columnId) => { e.preventDefault(); setDragOverColumn(columnId); };
+        const handleDrop = (e, targetColumnId) => { e.preventDefault(); if (draggedItem && draggedItem.sourceColumnId !== targetColumnId) { onDragEnd(draggedItem.item, targetColumnId); } setDraggedItem(null); setDragOverColumn(null); };
+
+        return (
+            <div className="flex gap-6 overflow-x-auto p-2">
+                {Object.values(columns).sort((a, b) => a.order - b.order).map((column) => (
+                    <div key={column.id} className={cn("w-80 flex-shrink-0 flex flex-col rounded-xl transition-colors duration-300", dragOverColumn === column.id ? 'bg-gray-200/50 dark:bg-white/10' : '')} onDragOver={(e) => handleDragOver(e, column.id)} onDrop={(e) => handleDrop(e, column.id)} onDragLeave={() => setDragOverColumn(null)}>
+                        <div className="p-4 flex justify-between items-center border-b-2" style={{ borderColor: column.color || '#3B82F6' }}>
+                             <h3 className="font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                                {column.title}
+                                {column.isConclusion && <CheckSquareIcon className="h-4 w-4 text-green-500" title="Coluna de Conclusão"/>}
+                                {column.isArchiveColumn && <ArchiveIcon className="h-4 w-4 text-red-500" title="Coluna de Arquivo/Descarte"/>}
+                            </h3>
+                            <span className="text-sm font-bold text-gray-500 dark:text-gray-400 bg-gray-200 dark:bg-gray-800 rounded-full px-2 py-0.5">{column.items.length}</span>
+                        </div>
+                        <div className="p-2 space-y-3 overflow-y-auto min-h-[200px]">
+                            {column.items.length > 0 ? (column.items.map(item => (
+                                <div key={item.id} draggable onDragStart={(e) => handleDragStart(e, item, column.id)}>
+                                    {typeof children === 'function' && children(item)}
+                                </div>
+                            ))) : (<div className="text-center text-sm text-gray-500 dark:text-gray-600 p-4">Nenhuma tarefa aqui.</div>)}
+                        </div>
+                    </div>
+                ))}
+            </div>
+        );
+    };
+
+    // ===================================================================================
+    // Lógica principal do componente TasksPage
+    // ===================================================================================
+    
+    useEffect(() => {
+        const conclusionColumn = taskColumns.find(c => c.isConclusion);
+        if (!conclusionColumn || !tasks.length) return;
+
+        const now = new Date();
+        const twoDaysInMs = 2 * 24 * 60 * 60 * 1000;
+        const tasksToArchive = [];
+
+        tasks.forEach(task => {
+            if (task.status === conclusionColumn.title && task.completedAt && !task.archived) {
+                const completedDate = task.completedAt.toDate();
+                if ((now - completedDate) > twoDaysInMs) {
+                    tasksToArchive.push(task.id);
+                }
+            }
+        });
+
+        if (tasksToArchive.length > 0) {
+            const batch = writeBatch(db);
+            tasksToArchive.forEach(taskId => {
+                const taskRef = doc(db, "tasks", taskId);
+                batch.update(taskRef, { archived: true });
+            });
+            batch.commit().then(() => {
+                toast({ title: "Tarefas Arquivadas", description: `${tasksToArchive.length} tarefa(s) foram arquivadas automaticamente.` });
+            });
+        }
+    }, [tasks, taskColumns, db, toast]);
+
     if (!taskColumns) {
         return <div className="p-8 text-center">Carregando colunas...</div>;
     }
-
+    
     const handleDragEnd = async (item, targetColumnId) => {
         const targetColumn = taskColumns.find(c => c.id === targetColumnId);
         if (!targetColumn) return;
-        const newStatus = targetColumn.title;
-        await updateTask(item.id, { ...item, status: newStatus });
-        toast({ title: "Tarefa Atualizada", description: `Tarefa movida para "${newStatus}".` });
+
+        let updateData = { status: targetColumn.title };
+
+        if (targetColumn.isConclusion) {
+            updateData.completedAt = serverTimestamp();
+            logAction({ actionType: 'CONCLUSÃO', module: 'Tarefas', description: `concluiu a tarefa "${item.title}".` });
+            toast({ title: "Tarefa Concluída!", description: `"${item.title}" será arquivada em 2 dias.` });
+        }
+        
+        await updateTask(item.id, updateData);
     };
 
     const handleOpenTaskModal = (task = null) => {
         setEditingTask(task);
         setTaskModalOpen(true);
+    };
+    
+    const handleViewTask = (task) => {
+        setViewingTask(task);
     };
 
     const handleSaveTask = async (taskData) => {
@@ -3262,9 +3528,9 @@ function TasksPage() {
             await updateTask(taskData.id, taskData);
             toast({ title: "Tarefa Atualizada", description: `"${taskData.title}" atualizada.` });
         } else {
-            const firstColumn = taskColumns[0];
+            const firstColumn = taskColumns.sort((a,b) => a.order - b.order)[0];
             const status = firstColumn ? firstColumn.title : 'Pendente';
-            await addTask({ ...taskData, status });
+            await addTask({ ...taskData, status, archived: false });
             toast({ title: "Tarefa Adicionada", description: `"${taskData.title}" criada.` });
         }
         setTaskModalOpen(false);
@@ -3278,107 +3544,70 @@ function TasksPage() {
         } catch (e) {}
     };
 
-    const handleAddColumn = async (columnData) => {
-        const newColumn = {
-            ...columnData,
-            boardId: 'tasks',
-            order: taskColumns.length
-        };
-        const success = await addKanbanColumn(newColumn);
-        if (success) {
-            toast({ title: "Coluna Adicionada!" });
-            setColumnModalOpen(false);
-        } else {
-            toast({ title: "Erro", variant: 'destructive' });
-        }
-    };
-
-    const handleDeleteColumn = async (columnId) => {
-        const itemsInColumn = tasks.filter(t => t.status === taskColumns.find(c => c.id === columnId)?.title);
-        if (itemsInColumn.length > 0) {
-            toast({ title: "Coluna não está vazia!", description: "Mova as tarefas para outra coluna antes de excluir.", variant: 'destructive' });
-            return;
-        }
+    const handleSaveColumns = async (updatedColumns) => {
+        const batch = writeBatch(db);
+        updatedColumns.forEach((col, index) => {
+            const { id, ...data } = col;
+            const docRef = id.startsWith('temp_') ? doc(collection(db, 'kanban_columns')) : doc(db, 'kanban_columns', id);
+            batch.set(docRef, { ...data, order: index }, { merge: true });
+        });
         try {
-            await confirm({ title: "Excluir Coluna?", description: "Esta ação não pode ser desfeita." });
-            await deleteKanbanColumn(columnId);
-            toast({ title: "Coluna Excluída" });
-        } catch (e) {}
+            await batch.commit();
+            toast({ title: "Sucesso!", description: "Estrutura do quadro de tarefas foi salva." });
+        } catch (error) {
+            toast({ title: "Erro", description: "Não foi possível salvar as alterações.", variant: 'destructive' });
+        }
     };
-
+    
     const columnsForBoard = useMemo(() => {
-        if (!taskColumns) return {}; // Proteção extra
+        const visibleTasks = tasks.filter(task => !task.archived);
+        if (!taskColumns) return {};
         return taskColumns.reduce((acc, column) => {
             acc[column.id] = {
                 ...column,
-                items: tasks.filter(t => t.status === column.title)
+                items: visibleTasks.filter(t => t.status === column.title)
             };
             return acc;
         }, {});
     }, [taskColumns, tasks]);
 
-    const KanbanBoard = ({ columns, onDragEnd, children, onDeleteColumn }) => {
-        const [draggedItem, setDraggedItem] = useState(null);
-        const [dragOverColumn, setDragOverColumn] = useState(null);
-        const handleDragStart = (e, item, sourceColumnId) => { setDraggedItem({ item, sourceColumnId }); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', item.id); };
-        const handleDragOver = (e, columnId) => { e.preventDefault(); setDragOverColumn(columnId); };
-        const handleDrop = (e, targetColumnId) => { e.preventDefault(); if (draggedItem && draggedItem.sourceColumnId !== targetColumnId) { onDragEnd(draggedItem.item, targetColumnId); } setDraggedItem(null); setDragOverColumn(null); };
-
-        return (<div className="flex gap-6 overflow-x-auto p-2">{Object.entries(columns).map(([columnId, column]) => (
-            <div key={columnId} className={cn("w-80 flex-shrink-0 flex flex-col rounded-xl transition-colors duration-300", dragOverColumn === columnId ? 'bg-gray-200/50 dark:bg-white/10' : '')} onDragOver={(e) => handleDragOver(e, columnId)} onDrop={(e) => handleDrop(e, columnId)} onDragLeave={() => setDragOverColumn(null)}>
-                <div className="p-4 flex justify-between items-center border-b-2" style={{ borderColor: column.color }}>
-                    <h3 className="font-semibold text-gray-900 dark:text-white">{column.title}</h3>
-                    <div className="flex items-center gap-2">
-                        <span className="text-sm font-bold text-gray-500 dark:text-gray-400 bg-gray-200 dark:bg-gray-800 rounded-full px-2 py-0.5">{column.items.length}</span>
-                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onDeleteColumn(column.id)}><Trash2Icon className="h-4 w-4"/></Button>
-                    </div>
-                </div>
-                <div className="p-2 space-y-3 overflow-y-auto min-h-[200px]">{column.items.length > 0 ? (column.items.map(item => (<div key={item.id} draggable onDragStart={(e) => handleDragStart(e, item, columnId)}>{typeof children === 'function' && children(item)}</div>))) : (<div className="text-center text-sm text-gray-500 dark:text-gray-600 p-4">Nenhum item aqui.</div>)}</div>
-            </div>
-        ))}</div>);
-    };
-
-    const TaskCard = memo(({ task, onEdit, onDelete }) => {
-        const { clients, leads, users } = useData();
-        const linkedItem = task.linkedToType === 'client' ? clients.find(c => c.id === task.linkedToId) : leads.find(l => l.id === task.linkedToId);
-        const assignedUser = users.find(u => u.id === task.assignedTo);
-        const priorityColors = { 'Alta': 'border-red-500', 'Média': 'border-yellow-500', 'Baixa': 'border-blue-500' };
-        const renderDescription = (desc) => { const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+)/g; return (desc || '').split('\n').map((line, i) => <div key={i} className="text-sm text-gray-700 dark:text-gray-300 mt-2 whitespace-pre-wrap">{line.split(urlRegex).map((part, j) => urlRegex.test(part) ? <a key={j} href={!part.startsWith('http') ? `https://${part}` : part} target="_blank" rel="noopener noreferrer" className="text-cyan-500 hover:underline">{part}</a> : part)}</div>); };
-        return (<GlassPanel className={cn("p-4 cursor-grab active:cursor-grabbing group border-l-4", priorityColors[task.priority] || 'border-gray-500')}>
-            <div className="flex justify-between items-start">
-                <p className="font-bold text-gray-900 dark:text-white flex-grow">{task.title}</p>
-                <div className="flex opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onEdit(task)}><PencilIcon className="h-4 w-4" /></Button>
-                    <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500/70 hover:text-red-400" onClick={() => onDelete(task)}><Trash2Icon className="h-4 w-4" /></Button>
-                </div>
-            </div>
-            {linkedItem && (<p className="text-xs mt-2 text-cyan-700 dark:text-cyan-400 bg-cyan-100 dark:bg-cyan-900/50 px-2 py-1 rounded-md inline-block">{task.linkedToType === 'client' ? 'Cliente: ' : 'Lead: '} {linkedItem.general?.holderName || linkedItem.name}</p>)}
-            {renderDescription(task.description)}
-            <div className="mt-3 text-xs text-gray-500 flex justify-between items-center">
-                <span>Prazo: {task.dueDate ? formatDate(task.dueDate) : 'Sem prazo'}</span>
-                {assignedUser && <div className="w-6 h-6 rounded-full bg-violet-200 dark:bg-violet-900 flex items-center justify-center font-bold text-violet-700 dark:text-violet-300 border-2 border-violet-400 dark:border-violet-700" title={assignedUser.name}>{assignedUser.name?.[0]}</div>}
-            </div>
-        </GlassPanel>);
-    });
-
     return (
         <div className="p-4 sm:p-6 lg:p-8">
             <div className="flex justify-between items-center mb-6">
                 <h2 className="text-3xl font-bold text-gray-900 dark:text-white">Minhas Tarefas</h2>
-                 <div className="flex gap-2">
-                     <Button onClick={() => setColumnModalOpen(true)}><PaletteIcon className="h-4 w-4 mr-2"/>Gerenciar Colunas</Button>
-                     <Button onClick={() => handleOpenTaskModal()} variant="violet"><PlusCircleIcon className="h-5 w-5 mr-2" />Nova Tarefa</Button>
+                <div className="flex gap-2">
+                    <Button onClick={() => setManageColumnsModalOpen(true)}>
+                        <PaletteIcon className="h-4 w-4 mr-2"/>Gerenciar Colunas
+                    </Button>
+                    <Button onClick={() => handleOpenTaskModal()} variant="violet">
+                        <PlusCircleIcon className="h-5 w-5 mr-2" />Nova Tarefa
+                    </Button>
                 </div>
             </div>
             {loading && !tasks.length ? (<p className="text-center text-gray-500">Carregando...</p>) : (
                 <GlassPanel className="p-4">
-                    <KanbanBoard columns={columnsForBoard} onDragEnd={handleDragEnd} onDeleteColumn={handleDeleteColumn}>
-                        {(item) => <TaskCard task={item} onEdit={handleOpenTaskModal} onDelete={handleDeleteTask} />}
+                    <KanbanBoard columns={columnsForBoard} onDragEnd={handleDragEnd}>
+                        {(item) => <TaskCard task={item} onEdit={handleOpenTaskModal} onDelete={handleDeleteTask} onView={handleViewTask} />}
                     </KanbanBoard>
                 </GlassPanel>
             )}
             <TaskModal isOpen={isTaskModalOpen} onClose={() => setTaskModalOpen(false)} onSave={handleSaveTask} task={editingTask} />
-            <ColumnModal isOpen={isColumnModalOpen} onClose={() => setColumnModalOpen(false)} onSave={handleAddColumn} />
+            
+            <ManageColumnsModal
+                isOpen={isManageColumnsModalOpen}
+                onClose={() => setManageColumnsModalOpen(false)}
+                onSave={handleSaveColumns}
+                columns={taskColumns}
+                boardId="tasks"
+                title="Gerenciar Colunas de Tarefas"
+                showConclusionButton={true}
+            />
+            
+            <TaskViewModal 
+                isOpen={!!viewingTask} 
+                onClose={() => setViewingTask(null)} 
+                task={viewingTask} 
+            />
         </div>
     );
 }
@@ -3429,23 +3658,36 @@ function BoletoTaskManager() {
         if (!clients.length || !users.length || !tasks) return;
 
         const hoje = new Date();
-        const mesAtual = hoje.getMonth() + 1;
+        const mesAtual = hoje.getMonth(); // Usar o índice do mês (0-11) para comparações
         const anoAtual = hoje.getFullYear();
 
         clients.forEach(client => {
             (client.contracts || []).forEach(contract => {
                 if (contract.status === 'ativo' && contract.boletoSentDate && contract.boletoResponsibleId) {
+                    
                     const dataEnvioBoleto = new Date(contract.boletoSentDate + 'T00:00:00');
                     const diaEnvio = dataEnvioBoleto.getDate();
-                    
+
                     if (hoje.getDate() >= diaEnvio) {
-                        const tituloTarefa = `Enviar Boleto - ${client.general.holderName} - ${mesAtual}/${anoAtual}`;
-                        const tarefaJaExiste = tasks.some(t => t.title === tituloTarefa);
+                        
+                        // 1. Pega o nome correto do cliente (PME ou PF/Adesão)
+                        const clientDisplayName = client.general?.companyName || client.general?.holderName || 'Cliente Sem Nome';
+                        const tituloTarefa = `Enviar Boleto - ${clientDisplayName}`;
+
+                        // 2. A verificação se a tarefa já existe agora é MUITO mais robusta
+                        // Ela verifica se já existe uma tarefa de boleto para ESTE cliente, criada NESTE mês e ano.
+                        const tarefaJaExiste = tasks.some(task => 
+                            task.linkedToId === client.id &&
+                            task.title === tituloTarefa &&
+                            task.createdAt &&
+                            task.createdAt.toDate().getMonth() === mesAtual &&
+                            task.createdAt.toDate().getFullYear() === anoAtual
+                        );
 
                         if (!tarefaJaExiste) {
-                            const dueDate = new Date(anoAtual, mesAtual - 1, diaEnvio);
+                            const dueDate = new Date(anoAtual, mesAtual, diaEnvio);
                             
-                            const description = `Acessar portal da ${contract.planOperator || 'Operadora'}:\nPortal: ${contract.credentials?.portalSite || 'Não informado'}\nLogin: ${contract.credentials?.portalLogin || 'Não informado'}\nSenha: ${contract.credentials?.portalPassword || 'Não informado'}\n\nEnviar para o WhatsApp:\nhttps://wa.me/55${(client.general.phone || '').replace(/\D/g, '')}`;
+                            const description = `Acessar portal da ${contract.planOperator || 'Operadora'} para o boleto de ${mesAtual + 1}/${anoAtual}.\n\nEnviar para o WhatsApp:\nhttps://wa.me/55${(client.general.contactPhone || client.general.phone || '').replace(/\D/g, '')}`;
 
                             const newTask = {
                                 title: tituloTarefa,
@@ -3467,7 +3709,6 @@ function BoletoTaskManager() {
 
     return null;
 }
-
 // --- ORQUESTRADOR PRINCIPAL DA APLICAÇÃO ---
 function MainApp() {
     const [page, setPage] = useState('dashboard');

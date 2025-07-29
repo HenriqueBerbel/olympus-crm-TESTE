@@ -3,9 +3,14 @@ import { createPortal } from 'react-dom';
 import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut, updatePassword, EmailAuthProvider, reauthenticateWithCredential, deleteUser as deleteFirebaseAuthUser } from "firebase/auth";
 import { getFirestore, collection, onSnapshot, addDoc, doc, setDoc, updateDoc, deleteDoc, writeBatch, query, orderBy, where, getDocs, serverTimestamp, arrayUnion, arrayRemove } from "firebase/firestore";
 import { db, auth } from './firebase.js';
+import JSZip from 'jszip';
+import { saveAs } from 'file-saver';
+
 
 // --- ÍCONES E UTILITÁRIOS ---
 
+
+const DownloadIcon = memo((props) => <IconWrapper {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" x2="12" y1="15" y2="3" /></IconWrapper>);
 const PaletteIcon = memo((props) => <IconWrapper {...props}><circle cx="12" cy="12" r="10"></circle><path d="M12 2a10 10 0 1 0 10 10"></path><path d="M12 12a5 5 0 1 0 5 5"></path><path d="M12 12a5 5 0 1 1 5-5"></path></IconWrapper>);
 const GripVerticalIcon = memo((props) => <IconWrapper {...props}><circle cx="9" cy="12" r="1"></circle><circle cx="9" cy="5" r="1"></circle><circle cx="9" cy="19" r="1"></circle><circle cx="15" cy="12" r="1"></circle><circle cx="15" cy="5" r="1"></circle><circle cx="15" cy="19" r="1"></circle></IconWrapper>);
 const PercentIcon = memo((props) => <IconWrapper {...props}><line x1="19" y1="5" x2="5" y2="19"></line><circle cx="6.5" cy="6.5" r="2.5"></circle><circle cx="17.5" cy="17.5" r="2.5"></circle></IconWrapper>);
@@ -687,99 +692,241 @@ const AvatarFallback = ({ children, ...props }) => <span className="flex h-full 
 
 // --- COMPONENTES DE FORMULÁRIO (CLIENTES) ---
 const FormSection = ({ title, children, cols = 3 }) => (<div className="mb-8"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80 border-b border-gray-200 dark:border-white/10 pb-3 mb-6">{title}</h3><div className={`grid grid-cols-1 md:grid-cols-2 lg:grid-cols-${cols} gap-6`}>{children}</div></div>);
-const GeneralInfoForm = ({ formData, handleChange, errors }) => (
-    <>
-    <FormSection title="Visão Geral" cols={3}>
-        <div>
-            <Label>Nome da Empresa</Label>
-            <Input name="general.companyName" value={formData?.general?.companyName || ''} onChange={handleChange} />
-        </div>
-        <div>
-            <Label>Tipo de Plano</Label>
-            <Select name="general.clientType" value={formData?.general?.clientType || ''} onChange={handleChange}>
-                <option>PME</option><option>Pessoa Física</option><option>Adesão</option>
-            </Select>
-        </div>
-        <div>
-            <Label>Status</Label>
-            <Select name="general.status" value={formData?.general?.status || ''} onChange={handleChange}>
-                <option>Ativo</option><option>Inativo</option><option>Prospect</option><option>Pendente</option>
-            </Select>
-        </div>
-        <div>
-            <Label>CNPJ</Label>
-            <Input name="general.cnpj" value={formData?.general?.cnpj || ''} onChange={handleChange} mask={maskCNPJ} error={errors?.cnpj} maxLength="18" />
-            {errors?.cnpj && <p className="text-xs text-red-500 mt-1">{errors.cnpj}</p>}
-        </div>
-        <div>
-            <Label>Nome do Responsável</Label>
-            <Input name="general.responsibleName" value={formData?.general?.responsibleName || ''} onChange={handleChange} />
-        </div>
-        <div>
-            <Label>CPF do Responsável</Label>
-            <Input name="general.responsibleCpf" value={formData?.general?.responsibleCpf || ''} onChange={handleChange} mask={maskCPF} error={errors?.responsibleCpf} maxLength="14" />
-            {errors?.responsibleCpf && <p className="text-xs text-red-500 mt-1">{errors.responsibleCpf}</p>}
-        </div>
-    </FormSection>
+const GeneralInfoForm = ({ formData, handleChange, errors }) => {
+    const clientType = formData?.general?.clientType;
 
-    <FormSection title="Endereço" cols={3}>
-        <div>
-            <Label>CEP</Label>
-            <Input name="address.cep" value={formData?.address?.cep || ''} onChange={handleChange} mask={maskCEP} maxLength="9" />
-        </div>
-        <div>
-            <Label>Logradouro</Label>
-            <Input name="address.street" value={formData?.address?.street || ''} onChange={handleChange} />
-        </div>
-        <div>
-            <Label>Complemento</Label>
-            <Input name="address.complement" value={formData?.address?.complement || ''} onChange={handleChange} />
-        </div>
-        <div>
-            <Label>Bairro</Label>
-            <Input name="address.neighborhood" value={formData?.address?.neighborhood || ''} onChange={handleChange} />
-        </div>
-        <div>
-            <Label>Cidade</Label>
-            <Input name="address.city" value={formData?.address?.city || ''} onChange={handleChange} />
-        </div>
-        <div>
-            <Label>Estado</Label>
-            <Input name="address.state" value={formData?.address?.state || ''} onChange={handleChange} />
-        </div>
-    </FormSection>
+    // Opções para o dropdown de Vínculo (Pessoa Física)
+    const kinshipOptions = ["Pai", "Mãe", "Tia", "Tio", "Avô", "Avó", "Filho(a)", "Cônjuge"];
 
-    <FormSection title="Contato" cols={3}>
-         <div>
-            <Label>Responsável</Label>
-            <Select name="general.responsibleStatus" value={formData?.general?.responsibleStatus || 'É beneficiário'} onChange={handleChange}>
-                <option>É beneficiário</option>
-                <option>Não é beneficiário</option>
-            </Select>
-        </div>
-        <div>
-            <Label>Email Responsável</Label>
-            <Input type="email" name="general.email" value={formData?.general?.email || ''} onChange={handleChange} error={errors?.email} />
-        </div>
-        <div>
-            <Label>Telefone Responsável</Label>
-            <Input type="tel" name="general.holderCpf" value={formData?.general?.holderCpf || ''} onChange={handleChange} />
-        </div>
-        <div>
-            <Label>Nome do Contato</Label>
-            <Input name="general.phone" value={formData?.general?.phone || ''} onChange={handleChange} />
-        </div>
-        <div>
-            <Label>Cargo do Contato</Label>
-            <Input name="general.contactRole" value={formData?.general?.contactRole || ''} onChange={handleChange} />
-        </div>
-        <div>
-            <Label>Telefone do Contato</Label>
-            <Input type="tel" name="general.contactPhone" value={formData?.general?.contactPhone || ''} onChange={handleChange} />
-        </div>
-    </FormSection>
-    </>
-);
+    return (
+        <>
+            {/* Seção Principal que sempre aparece */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                <div>
+                    <Label>Tipo de Plano</Label>
+                    <Select name="general.clientType" value={clientType || ''} onChange={handleChange}>
+                        <option value="">Selecione...</option>
+                        <option value="PME">PME</option>
+                        <option value="Pessoa Física">Pessoa Física</option>
+                        <option value="Adesão">Adesão</option>
+                    </Select>
+                </div>
+            </div>
+
+            {/* Renderização condicional baseada no Tipo de Plano */}
+            {clientType && (
+                <>
+                    {/* --- Formulário para PME --- */}
+                    {clientType === 'PME' && (
+                        <>
+                            <FormSection title="Dados da Empresa" cols={3}>
+                                <div>
+                                    <Label>Nome da Empresa</Label>
+                                    <Input name="general.companyName" value={formData.general?.companyName || ''} onChange={handleChange} />
+                                </div>
+                                <div>
+                                    <Label>Status</Label>
+                                    <Select name="general.status" value={formData.general?.status || 'Ativo'} onChange={handleChange}>
+                                        <option>Ativo</option><option>Inativo</option><option>Prospect</option><option>Pendente</option>
+                                    </Select>
+                                </div>
+                                <div>
+                                    <Label>CNPJ</Label>
+                                    <Input name="general.cnpj" value={formData.general?.cnpj || ''} onChange={handleChange} mask={maskCNPJ} error={errors?.cnpj} maxLength="18" />
+                                    {errors?.cnpj && <p className="text-xs text-red-500 mt-1">{errors.cnpj}</p>}
+                                </div>
+                                <div>
+                                    <Label>Nome do Responsável</Label>
+                                    <Input name="general.responsibleName" value={formData.general?.responsibleName || ''} onChange={handleChange} />
+                                </div>
+                                <div>
+                                    <Label>CPF do Responsável</Label>
+                                    <Input name="general.responsibleCpf" value={formData.general?.responsibleCpf || ''} onChange={handleChange} mask={maskCPF} error={errors?.responsibleCpf} maxLength="14" />
+                                    {errors?.responsibleCpf && <p className="text-xs text-red-500 mt-1">{errors.responsibleCpf}</p>}
+                                </div>
+                            </FormSection>
+                            <FormSection title="Contato" cols={3}>
+                                <div>
+                                    <Label>Responsável</Label>
+                                    <Select name="general.responsibleStatus" value={formData.general?.responsibleStatus || 'Beneficiário'} onChange={handleChange}>
+                                        <option>Beneficiário</option>
+                                        <option>Não Beneficiário</option>
+                                    </Select>
+                                </div>
+                                <div>
+                                    <Label>Email Responsável</Label>
+                                    <Input type="email" name="general.email" value={formData.general?.email || ''} onChange={handleChange} error={errors?.email} />
+                                </div>
+                                <div>
+                                    <Label>Telefone Responsável</Label>
+                                    <Input type="tel" name="general.phone" value={formData.general?.phone || ''} onChange={handleChange} />
+                                </div>
+                                <div>
+                                    <Label>Nome do Contato</Label>
+                                    <Input name="general.contactName" value={formData.general?.contactName || ''} onChange={handleChange} />
+                                </div>
+                                <div>
+                                    <Label>Cargo do Contato</Label>
+                                    <Input name="general.contactRole" value={formData.general?.contactRole || ''} onChange={handleChange} />
+                                </div>
+                                <div>
+                                    <Label>Telefone do Contato</Label>
+                                    <Input type="tel" name="general.contactPhone" value={formData.general?.contactPhone || ''} onChange={handleChange} />
+                                </div>
+                            </FormSection>
+                        </>
+                    )}
+
+                    {/* --- Formulário para Pessoa Física --- */}
+                    {clientType === 'Pessoa Física' && (
+                        <>
+                            <FormSection title="Dados do Titular" cols={3}>
+                                <div>
+                                    <Label>Nome Titular</Label>
+                                    <Input name="general.holderName" value={formData.general?.holderName || ''} onChange={handleChange} />
+                                </div>
+                                <div>
+                                    <Label>Status</Label>
+                                    <Select name="general.status" value={formData.general?.status || 'Ativo'} onChange={handleChange}>
+                                        <option>Ativo</option><option>Inativo</option><option>Prospect</option><option>Pendente</option>
+                                    </Select>
+                                </div>
+                                <div>
+                                    <Label>CPF Titular</Label>
+                                    <Input name="general.holderCpf" value={formData.general?.holderCpf || ''} onChange={handleChange} mask={maskCPF} error={errors?.holderCpf} maxLength="14" />
+                                </div>
+                                <div>
+                                    <Label>Nome do Responsável</Label>
+                                    <Input name="general.responsibleName" value={formData.general?.responsibleName || ''} onChange={handleChange} />
+                                </div>
+                                <div>
+                                    <Label>CPF do Responsável</Label>
+                                    <Input name="general.responsibleCpf" value={formData.general?.responsibleCpf || ''} onChange={handleChange} mask={maskCPF} error={errors?.responsibleCpf} maxLength="14" />
+                                </div>
+                            </FormSection>
+                            <FormSection title="Contato e Vínculo" cols={3}>
+                                 <div>
+                                    <Label>Responsável</Label>
+                                    <Select name="general.responsibleStatus" value={formData.general?.responsibleStatus || 'Beneficiário'} onChange={handleChange}>
+                                        <option>Beneficiário</option>
+                                        <option>Não Beneficiário</option>
+                                    </Select>
+                                </div>
+                                <div>
+                                    <Label>Email Responsável</Label>
+                                    <Input type="email" name="general.email" value={formData.general?.email || ''} onChange={handleChange} />
+                                </div>
+                                <div>
+                                    <Label>Telefone Responsável</Label>
+                                    <Input type="tel" name="general.phone" value={formData.general?.phone || ''} onChange={handleChange} />
+                                </div>
+                                <div>
+                                    <Label>Nome Contato</Label>
+                                    <Input name="general.contactName" value={formData.general?.contactName || ''} onChange={handleChange} />
+                                </div>
+                                <div>
+                                    <Label>Telefone Contato</Label>
+                                    <Input type="tel" name="general.contactPhone" value={formData.general?.contactPhone || ''} onChange={handleChange} />
+                                </div>
+                                <div>
+                                    <Label>Vínculo do Titular</Label>
+                                    <Select name="general.kinship" value={formData.general?.kinship || ''} onChange={handleChange}>
+                                        <option value="">Selecione...</option>
+                                        {kinshipOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                                    </Select>
+                                </div>
+                            </FormSection>
+                        </>
+                    )}
+
+                    {/* --- Formulário para Adesão --- */}
+                    {clientType === 'Adesão' && (
+                         <>
+                            <FormSection title="Dados do Titular" cols={3}>
+                                <div>
+                                    <Label>Nome Titular</Label>
+                                    <Input name="general.holderName" value={formData.general?.holderName || ''} onChange={handleChange} />
+                                </div>
+                                <div>
+                                    <Label>Status</Label>
+                                    <Select name="general.status" value={formData.general?.status || 'Ativo'} onChange={handleChange}>
+                                        <option>Ativo</option><option>Inativo</option><option>Prospect</option><option>Pendente</option>
+                                    </Select>
+                                </div>
+                                <div>
+                                    <Label>CPF Titular</Label>
+                                    <Input name="general.holderCpf" value={formData.general?.holderCpf || ''} onChange={handleChange} mask={maskCPF} error={errors?.holderCpf} maxLength="14" />
+                                </div>
+                                 <div>
+                                    <Label>Nome do Responsável</Label>
+                                    <Input name="general.responsibleName" value={formData.general?.responsibleName || ''} onChange={handleChange} />
+                                </div>
+                                <div>
+                                    <Label>CPF do Responsável</Label>
+                                    <Input name="general.responsibleCpf" value={formData.general?.responsibleCpf || ''} onChange={handleChange} mask={maskCPF} error={errors?.responsibleCpf} maxLength="14" />
+                                </div>
+                            </FormSection>
+                            <FormSection title="Dados de Adesão e Contato" cols={3}>
+                                <div>
+                                    <Label>Profissão</Label>
+                                    <Input name="general.profession" value={formData.general?.profession || ''} onChange={handleChange} />
+                                </div>
+                                <div>
+                                    <Label>Sindicato Filiado</Label>
+                                    <Input name="general.union" value={formData.general?.union || ''} onChange={handleChange} />
+                                </div>
+                                <div>
+                                    <Label>Administradora</Label>
+                                    <Input name="general.administrator" value={formData.general?.administrator || ''} onChange={handleChange} />
+                                </div>
+                                <div>
+                                    <Label>Email Responsável</Label>
+                                    <Input type="email" name="general.email" value={formData.general?.email || ''} onChange={handleChange} />
+                                </div>
+                                <div>
+                                    <Label>Nome Contato</Label>
+                                    <Input name="general.contactName" value={formData.general?.contactName || ''} onChange={handleChange} />
+                                </div>
+                                <div>
+                                    <Label>Telefone Contato</Label>
+                                    <Input type="tel" name="general.contactPhone" value={formData.general?.contactPhone || ''} onChange={handleChange} />
+                                </div>
+                            </FormSection>
+                        </>
+                    )}
+                    
+                    {/* Seção de Endereço (Comum a todos) */}
+                    <FormSection title="Endereço" cols={3}>
+                        <div>
+                            <Label>CEP</Label>
+                            <Input name="address.cep" value={formData.address?.cep || ''} onChange={handleChange} mask={maskCEP} maxLength="9" />
+                        </div>
+                        <div>
+                            <Label>Logradouro</Label>
+                            <Input name="address.street" value={formData.address?.street || ''} onChange={handleChange} />
+                        </div>
+                        <div>
+                            <Label>Complemento</Label>
+                            <Input name="address.complement" value={formData.address?.complement || ''} onChange={handleChange} />
+                        </div>
+                        <div>
+                            <Label>Bairro</Label>
+                            <Input name="address.neighborhood" value={formData.address?.neighborhood || ''} onChange={handleChange} />
+                        </div>
+                        <div>
+                            <Label>Cidade</Label>
+                            <Input name="address.city" value={formData.address?.city || ''} onChange={handleChange} />
+                        </div>
+                        <div>
+                            <Label>Estado</Label>
+                            <Input name="address.state" value={formData.address?.state || ''} onChange={handleChange} />
+                        </div>
+                    </FormSection>
+                </>
+            )}
+        </>
+    );
+};
 const InternalDataForm = ({ formData, handleChange }) => {
     const { users, partners } = useData();
 
@@ -1862,13 +2009,18 @@ function ClientForm({ client, onSave, onCancel, isConversion = false, leadData =
     );
 }
 function ClientsList({ onClientSelect, onAddClient }) {
-    const { clients, loading, operators } = useData();
+    // [ALTERAÇÃO]: Adicionado "users" e "useToast" para a função de exportação.
+    const { clients, loading, operators, users } = useData();
+    const { toast } = useToast();
+
     const [searchTerm, setSearchTerm] = useState('');
     const [filters, setFilters] = useState({ status: '', operator: '', month: '' });
     const [showFilters, setShowFilters] = useState(false);
     const [currentPage, setCurrentPage] = useState(1);
+    const [isExporting, setIsExporting] = useState(false); // [NOVO] Estado para o botão
     const itemsPerPage = 10;
     const handleFilterChange = (e) => { setCurrentPage(1); setFilters(prev => ({ ...prev, [e.target.name]: e.target.value })); };
+    
     const filteredClients = useMemo(() => {
         return clients
             .filter(client => {
@@ -1880,18 +2032,150 @@ function ClientsList({ onClientSelect, onAddClient }) {
             })
             .sort((a, b) => (a.general?.companyName || a.general?.holderName || '').localeCompare(b.general?.companyName || b.general?.holderName || ''));
     }, [clients, searchTerm, filters]);
+
+    // [NOVO] Função para exportar os clientes da lista filtrada
+    const handleExportFilteredClients = async () => {
+    if (filteredClients.length === 0) {
+        toast({ title: "Nenhum cliente", description: "A lista de clientes para exportar está vazia.", variant: "destructive" });
+        return;
+    }
+
+    setIsExporting(true);
+    toast({ title: "Iniciando exportação...", description: `Preparando dados de ${filteredClients.length} cliente(s).` });
+
+    const zip = new JSZip();
+    const getBrokerName = (id) => (users.find(u => u.id === id)?.name || 'N/A');
+    
+    const toCsv = (headers, rows) => {
+        let csvContent = '\uFEFF';
+        csvContent += headers.join(';') + '\n';
+        rows.forEach(row => {
+            csvContent += row.map(cell => `"${(cell || '').toString().replace(/"/g, '""')}"`).join(';') + '\n';
+        });
+        return csvContent;
+    };
+
+    const allClientRows = [];
+    const allContractRows = [];
+    const allBeneficiaryRows = [];
+
+    // [ALTERAÇÃO] Cabeçalhos atualizados para incluir todos os novos campos
+    const clientHeaders = ["ID Cliente", "Tipo de Plano", "Status", "Nome Empresa/Titular", "CNPJ/CPF Titular", "Nome Responsável", "CPF Responsável", "Vínculo do Titular (PF)", "Profissão (Adesão)", "Sindicato Filiado (Adesão)", "Administradora (Adesão)", "Responsável é Beneficiário?", "Email Responsável", "Telefone Responsável", "Nome Contato", "Cargo Contato", "Telefone Contato", "CEP", "Logradouro", "Complemento", "Bairro", "Cidade", "Estado", "Corretor Responsável", "Supervisor"];
+    const contractHeaders = ["ID Contrato", "ID Cliente", "Status", "Operadora", "Nº Proposta", "Nº Apólice", "Categoria", "Acomodação", "Tipos de Plano", "Valor", "Taxa", "Pagamento", "Vencimento Mensal", "Data Vigência", "Data Envio Boleto", "Data Renovação", "Responsável Boleto"];
+    const beneficiaryHeaders = ["ID Beneficiário", "ID Cliente", "Nome", "CPF", "Nascimento", "Parentesco", "Nº Carteirinha"];
+
+    for (const client of filteredClients) {
+        // [ALTERAÇÃO] Lógica para preencher os campos dinâmicos
+        allClientRows.push([
+            client.id,
+            client.general?.clientType,
+            client.general?.status,
+            client.general?.clientType === 'PME' ? client.general?.companyName : client.general?.holderName,
+            client.general?.clientType === 'PME' ? client.general?.cnpj : client.general?.holderCpf,
+            client.general?.responsibleName,
+            client.general?.responsibleCpf,
+            client.general?.kinship, // Campo de Pessoa Física
+            client.general?.profession, // Campo de Adesão
+            client.general?.union, // Campo de Adesão
+            client.general?.administrator, // Campo de Adesão
+            client.general?.responsibleStatus,
+            client.general?.email,
+            client.general?.phone, // Telefone Responsável
+            client.general?.contactName,
+            client.general?.contactRole, // Apenas PME
+            client.general?.contactPhone,
+            client.address?.cep, client.address?.street, client.address?.complement, client.address?.neighborhood, client.address?.city, client.address?.state, 
+            getBrokerName(client.internal?.brokerId), 
+            getBrokerName(client.internal?.supervisorId)
+        ]);
+
+        (client.contracts || []).forEach(con => {
+            allContractRows.push([
+                con.id, client.id, con.status, con.planOperator, con.proposalNumber, con.policyNumber, con.planCategory, con.accommodation, (con.planTypes || []).join('; '), con.contractValue, con.feeValue, con.paymentMethod, con.monthlyDueDate, formatDate(con.effectiveDate), formatDate(con.boletoSentDate), formatDate(con.renewalDate), getBrokerName(con.boletoResponsibleId)
+            ]);
+        });
+
+        (client.beneficiaries || []).forEach(ben => {
+            allBeneficiaryRows.push([
+                ben.id, client.id, ben.name, ben.cpf, formatDate(ben.dob), ben.kinship, ben.idCardNumber
+            ]);
+        });
+    }
+
+    zip.file("dados_gerais_clientes.csv", toCsv(clientHeaders, allClientRows));
+    if (allContractRows.length > 0) zip.file("contratos_clientes.csv", toCsv(contractHeaders, allContractRows));
+    if (allBeneficiaryRows.length > 0) zip.file("beneficiarios_clientes.csv", toCsv(beneficiaryHeaders, allBeneficiaryRows));
+    
+    const content = await zip.generateAsync({ type: "blob" });
+    saveAs(content, `exportacao_clientes.zip`);
+    setIsExporting(false);
+};
     const totalPages = Math.ceil(filteredClients.length / itemsPerPage);
     const currentClients = filteredClients.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
     const renderTableRows = () => { if (loading && clients.length === 0) return Array.from({ length: 5 }).map((_, i) => <SkeletonRow key={i} />); if (currentClients.length > 0) { return currentClients.map((client) => { const activeContract = client.contracts?.find(c => c.status === 'ativo'); return (<tr key={client.id} onClick={() => onClientSelect(client.id)} className="hover:bg-gray-100/50 dark:hover:bg-cyan-500/5 cursor-pointer transition-colors duration-200"><td className="px-6 py-4 whitespace-nowrap"><div className="font-medium text-gray-900 dark:text-white">{client?.general?.companyName || client?.general?.holderName}</div><div className="text-sm text-gray-500 dark:text-gray-400">{client?.general?.email}</div></td><td className="px-6 py-4 whitespace-nowrap"><span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${client?.general?.status === 'Ativo' ? 'bg-green-100 text-green-800 dark:bg-green-500/20 dark:text-green-400' : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-500/20 dark:text-yellow-400'}`}>{client?.general?.status}</span></td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">{activeContract?.planOperator || 'N/A'}</td><td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">{formatDate(activeContract?.effectiveDate) || 'N/A'}</td></tr>) }); } return <tr><td colSpan="4"><EmptyState title="Nenhum Cliente Encontrado" message="Ajuste os filtros ou adicione um novo cliente." actionText="Adicionar Novo Cliente" onAction={onAddClient} /></td></tr>; };
-    return (<div className="p-4 sm:p-6 lg:p-8"><div className="flex justify-between items-center mb-6"><h2 className="text-3xl font-bold text-gray-900 dark:text-white">Clientes</h2><div className="flex gap-2"><Button variant="outline" onClick={() => setShowFilters(!showFilters)}><FilterIcon className="h-4 w-4 mr-2" /> Filtros</Button><Button onClick={onAddClient}><PlusCircleIcon className="h-5 w-5 mr-2" /> Adicionar Cliente</Button></div></div>{showFilters && (<GlassPanel className="p-4 mb-6"><div className="grid grid-cols-1 md:grid-cols-4 gap-4"><Input placeholder="Procurar..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} /><Select name="status" value={filters.status} onChange={handleFilterChange}><option value="">Todos Status</option><option>Ativo</option><option>Inativo</option></Select><Select name="operator" value={filters.operator} onChange={handleFilterChange}><option value="">Todas Operadoras</option>{operators.map(op => <option key={op.id} value={op.name}>{op.name}</option>)}</Select><Input type="month" name="month" value={filters.month} onChange={handleFilterChange} /></div></GlassPanel>)}<GlassPanel><div className="overflow-x-auto"><table className="min-w-full"><thead className="border-b border-gray-200 dark:border-white/10"><tr>{['Nome', 'Status', 'Plano Ativo', 'Vigência Ativa'].map(h => <th key={h} scope="col" className="px-6 py-4 text-left text-sm font-semibold text-gray-500 dark:text-gray-300 tracking-wider">{h}</th>)}</tr></thead><tbody className="divide-y divide-gray-200 dark:divide-white/10">{renderTableRows()}</tbody></table></div></GlassPanel>{totalPages > 1 && (<div className="flex justify-center items-center gap-2 mt-6"><Button onClick={() => setCurrentPage(p => p - 1)} disabled={currentPage === 1} variant="outline">Anterior</Button><span className="text-gray-700 dark:text-gray-300">Página {currentPage} de {totalPages}</span><Button onClick={() => setCurrentPage(p => p + 1)} disabled={currentPage === totalPages} variant="outline">Próxima</Button></div>)}</div>);
+    
+    return (
+        <div className="p-4 sm:p-6 lg:p-8">
+            <div className="flex justify-between items-center mb-6">
+                <h2 className="text-3xl font-bold text-gray-900 dark:text-white">Clientes</h2>
+                <div className="flex gap-2 flex-wrap">
+                    {/* [NOVO] Botão de exportação em massa */}
+                    <Button variant="outline" onClick={handleExportFilteredClients} disabled={isExporting || filteredClients.length === 0}>
+                        {isExporting ? 'Exportando...' : <><DownloadIcon className="h-4 w-4 mr-2" />Exportar Lista ({filteredClients.length})</>}
+                    </Button>
+                    <Button variant="outline" onClick={() => setShowFilters(!showFilters)}>
+                        <FilterIcon className="h-4 w-4 mr-2" /> Filtros
+                    </Button>
+                    <Button onClick={onAddClient}>
+                        <PlusCircleIcon className="h-5 w-5 mr-2" /> Adicionar Cliente
+                    </Button>
+                </div>
+            </div>
+            {showFilters && (
+                <GlassPanel className="p-4 mb-6">
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <Input placeholder="Procurar..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                        <Select name="status" value={filters.status} onChange={handleFilterChange}>
+                            <option value="">Todos Status</option>
+                            <option>Ativo</option>
+                            <option>Inativo</option>
+                        </Select>
+                        <Select name="operator" value={filters.operator} onChange={handleFilterChange}>
+                            <option value="">Todas Operadoras</option>
+                            {operators.map(op => <option key={op.id} value={op.name}>{op.name}</option>)}
+                        </Select>
+                        <Input type="month" name="month" value={filters.month} onChange={handleFilterChange} />
+                    </div>
+                </GlassPanel>
+            )}
+            <GlassPanel>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full">
+                        <thead className="border-b border-gray-200 dark:border-white/10">
+                            <tr>{['Nome', 'Status', 'Plano Ativo', 'Vigência Ativa'].map(h => <th key={h} scope="col" className="px-6 py-4 text-left text-sm font-semibold text-gray-500 dark:text-gray-300 tracking-wider">{h}</th>)}</tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200 dark:divide-white/10">{renderTableRows()}</tbody>
+                    </table>
+                </div>
+            </GlassPanel>
+            {totalPages > 1 && (
+                <div className="flex justify-center items-center gap-2 mt-6">
+                    <Button onClick={() => setCurrentPage(p => p - 1)} disabled={currentPage === 1} variant="outline">Anterior</Button>
+                    <span className="text-gray-700 dark:text-gray-300">Página {currentPage} de {totalPages}</span>
+                    <Button onClick={() => setCurrentPage(p => p + 1)} disabled={currentPage === totalPages} variant="outline">Próxima</Button>
+                </div>
+            )}
+        </div>
+    );
 };
 
 function ClientDetails({ client, onBack, onEdit }) {
     const { toast } = useToast();
-    const { deleteClient } = useData();
+    const { deleteClient, users } = useData();
     const confirm = useConfirm();
-    const [activeTab, setActiveTab] = useState('general'); // MUDANÇA AQUI
+    const [activeTab, setActiveTab] = useState('general');
     const { preferences } = usePreferences();
+    const [isExporting, setIsExporting] = useState(false);
 
     if (!client) return null;
 
@@ -1908,46 +2192,189 @@ function ClientDetails({ client, onBack, onEdit }) {
             }
         } catch (e) {}
     };
+
+    const handleExportSingleClient = async () => {
+    setIsExporting(true);
+    const zip = new JSZip();
+    const clientName = (client.general?.companyName || client.general?.holderName || 'cliente').replace(/ /g, '_');
+
+    const getBrokerName = (id) => (users.find(u => u.id === id)?.name || 'N/A');
+    
+    const toCsv = (headers, rows) => {
+        let csvContent = '\uFEFF';
+        csvContent += headers.join(';') + '\n';
+        rows.forEach(row => {
+            csvContent += row.map(cell => `"${(cell || '').toString().replace(/"/g, '""')}"`).join(';') + '\n';
+        });
+        return csvContent;
+    };
+
+    // 1. DADOS GERAIS - [ALTERAÇÃO]
+    const clientHeaders = ["ID Cliente", "Tipo de Plano", "Status", "Nome Empresa/Titular", "CNPJ/CPF Titular", "Nome Responsável", "CPF Responsável", "Vínculo do Titular (PF)", "Profissão (Adesão)", "Sindicato Filiado (Adesão)", "Administradora (Adesão)", "Responsável é Beneficiário?", "Email Responsável", "Telefone Responsável", "Nome Contato", "Cargo Contato", "Telefone Contato", "CEP", "Logradouro", "Complemento", "Bairro", "Cidade", "Estado", "Corretor Responsável", "Supervisor"];
+    const clientRows = [[
+        client.id,
+        client.general?.clientType,
+        client.general?.status,
+        client.general?.clientType === 'PME' ? client.general?.companyName : client.general?.holderName,
+        client.general?.clientType === 'PME' ? client.general?.cnpj : client.general?.holderCpf,
+        client.general?.responsibleName,
+        client.general?.responsibleCpf,
+        client.general?.kinship,
+        client.general?.profession,
+        client.general?.union,
+        client.general?.administrator,
+        client.general?.responsibleStatus,
+        client.general?.email,
+        client.general?.phone,
+        client.general?.contactName,
+        client.general?.contactRole,
+        client.general?.contactPhone,
+        client.address?.cep, client.address?.street, client.address?.complement, client.address?.neighborhood, client.address?.city, client.address?.state, 
+        getBrokerName(client.internal?.brokerId), 
+        getBrokerName(client.internal?.supervisorId)
+    ]];
+    zip.file("cliente_visao_geral.csv", toCsv(clientHeaders, clientRows));
+
+    // 2. CONTRATOS (sem alterações)
+    if (client.contracts && client.contracts.length > 0) {
+        const contractHeaders = ["ID Contrato", "ID Cliente", "Status", "Operadora", "Nº Proposta", "Nº Apólice", "Categoria", "Acomodação", "Tipos de Plano", "Valor", "Taxa", "Pagamento", "Vencimento Mensal", "Data Vigência", "Data Envio Boleto", "Data Renovação", "Responsável Boleto"];
+        const contractRows = client.contracts.map(con => [
+            con.id, client.id, con.status, con.planOperator, con.proposalNumber, con.policyNumber, con.planCategory, con.accommodation, (con.planTypes || []).join('; '), con.contractValue, con.feeValue, con.paymentMethod, con.monthlyDueDate, formatDate(con.effectiveDate), formatDate(con.boletoSentDate), formatDate(con.renewalDate), getBrokerName(con.boletoResponsibleId)
+        ]);
+        zip.file("contratos.csv", toCsv(contractHeaders, contractRows));
+    }
+
+    // 3. BENEFICIÁRIOS (sem alterações)
+    if (client.beneficiaries && client.beneficiaries.length > 0) {
+        const beneficiaryHeaders = ["ID Beneficiário", "ID Cliente", "Nome", "CPF", "Nascimento", "Parentesco", "Peso (kg)", "Altura (cm)", "Nº Carteirinha"];
+        const beneficiaryRows = client.beneficiaries.map(ben => [
+            ben.id, client.id, ben.name, ben.cpf, formatDate(ben.dob), ben.kinship, ben.weight, ben.height, ben.idCardNumber
+        ]);
+        zip.file("beneficiarios.csv", toCsv(beneficiaryHeaders, beneficiaryRows));
+    }
+
+    // 4. HISTÓRICO (sem alterações)
+    if (client.observations && client.observations.length > 0) {
+        const historyHeaders = ["ID Cliente", "Data", "Autor", "Observação"];
+        const historyRows = client.observations.map(obs => [
+            client.id, formatDateTime(obs.timestamp), obs.authorName, obs.text
+        ]);
+        zip.file("historico.csv", toCsv(historyHeaders, historyRows));
+    }
+    
+    // 5. CREDENCIAIS (sem alterações)
+    const credentialRows = [];
+    (client.contracts || []).forEach(con => {
+        (con.credentialsList || []).forEach(cred => {
+            credentialRows.push([
+                cred.id, con.id, client.id, cred.title, cred.createdEmail, cred.portalSite, cred.portalLogin, cred.portalUser, cred.appLogin
+            ]);
+        });
+    });
+    if (credentialRows.length > 0) {
+        const credentialHeaders = ["ID Credencial", "ID Contrato", "ID Cliente", "Título", "Email Criado", "Site do Portal", "Login Portal", "Usuário Portal", "Login App"];
+        zip.file("credenciais.csv", toCsv(credentialHeaders, credentialRows));
+    }
+
+    const content = await zip.generateAsync({ type: "blob" });
+    saveAs(content, `export_${clientName}.zip`);
+    setIsExporting(false);
+};
     
     const OverviewTab = ({ client }) => {
-    return (<>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-1 mb-6">
-            <DetailItem label="Nome Empresa" value={client?.general?.companyName} />
-            <DetailItem label="Tipo de Plano" value={client?.general?.clientType} />
-            <DetailItem label="Status" value={client?.general?.status} />
-            <DetailItem label="CNPJ" value={client?.general?.cnpj} />
-            <DetailItem label="Nome do Responsável" value={client?.general?.responsibleName} />
-            <DetailItem label="CPF do Responsável" value={client?.general?.responsibleCpf} />
-        </div>
-        <h4 className={cn("text-lg font-semibold text-cyan-600 dark:text-cyan-400/80 border-b border-gray-200 dark:border-white/10 pb-2 mb-4", preferences.uppercaseMode && "uppercase")}>Endereço</h4>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-1 mb-6">
-            <DetailItem label="CEP" value={client?.address?.cep} />
-            <DetailItem label="Logradouro" value={client?.address?.street} />
-            <DetailItem label="Complemento" value={client?.address?.complement} />
-            <DetailItem label="Bairro" value={client?.address?.neighborhood} />
-            <DetailItem label="Cidade" value={client?.address?.city} />
-            <DetailItem label="Estado" value={client?.address?.state} />
-        </div>
-        <h4 className={cn("text-lg font-semibold text-cyan-600 dark:text-cyan-400/80 border-b border-gray-200 dark:border-white/10 pb-2 mb-4", preferences.uppercaseMode && "uppercase")}>Contato</h4>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-1">
-            <DetailItem label="Responsável" value={client?.general?.responsibleStatus} />
-            <DetailItem label="Email Responsável" value={client?.general?.email} />
-            <DetailItem label="Telefone Responsável" value={client?.general?.holderCpf} />
-            <DetailItem label="Nome do Contato" value={client?.general?.phone} />
-            <DetailItem label="Cargo do Contato" value={client?.general?.contactRole} />
-            <DetailItem label="Telefone do Contato" value={client?.general?.contactPhone} />
-        </div>
-    </>);
-  };
+    const clientType = client?.general?.clientType;
 
     return (
+        <>
+            {/* --- Layout para PME --- */}
+            {clientType === 'PME' && (
+                <>
+                    <FormSection title="Dados da Empresa">
+                        <DetailItem label="Tipo de Plano" value={clientType} />
+                        <DetailItem label="Nome da Empresa" value={client.general?.companyName} />
+                        <DetailItem label="Status" value={client.general?.status} />
+                        <DetailItem label="CNPJ" value={client.general?.cnpj} />
+                        <DetailItem label="Nome do Responsável" value={client.general?.responsibleName} />
+                        <DetailItem label="CPF do Responsável" value={client.general?.responsibleCpf} />
+                    </FormSection>
+                    <FormSection title="Contato">
+                        <DetailItem label="Responsável" value={client.general?.responsibleStatus} />
+                        <DetailItem label="Email Responsável" value={client.general?.email} />
+                        <DetailItem label="Telefone Responsável" value={client.general?.phone} />
+                        <DetailItem label="Nome do Contato" value={client.general?.contactName} />
+                        <DetailItem label="Cargo do Contato" value={client.general?.contactRole} />
+                        <DetailItem label="Telefone do Contato" value={client.general?.contactPhone} />
+                    </FormSection>
+                </>
+            )}
+
+            {/* --- Layout para Pessoa Física --- */}
+            {clientType === 'Pessoa Física' && (
+                <>
+                    <FormSection title="Dados do Titular">
+                        <DetailItem label="Tipo de Plano" value={clientType} />
+                        <DetailItem label="Nome Titular" value={client.general?.holderName} />
+                        <DetailItem label="Status" value={client.general?.status} />
+                        <DetailItem label="CPF Titular" value={client.general?.holderCpf} />
+                        <DetailItem label="Nome do Responsável" value={client.general?.responsibleName} />
+                        <DetailItem label="CPF do Responsável" value={client.general?.responsibleCpf} />
+                    </FormSection>
+                    <FormSection title="Contato e Vínculo">
+                        <DetailItem label="Responsável" value={client.general?.responsibleStatus} />
+                        <DetailItem label="Email Responsável" value={client.general?.email} />
+                        <DetailItem label="Telefone Responsável" value={client.general?.phone} />
+                        <DetailItem label="Nome Contato" value={client.general?.contactName} />
+                        <DetailItem label="Telefone Contato" value={client.general?.contactPhone} />
+                        <DetailItem label="Vínculo do Titular" value={client.general?.kinship} />
+                    </FormSection>
+                </>
+            )}
+
+            {/* --- Layout para Adesão --- */}
+            {clientType === 'Adesão' && (
+                <>
+                     <FormSection title="Dados do Titular">
+                        <DetailItem label="Tipo de Plano" value={clientType} />
+                        <DetailItem label="Nome Titular" value={client.general?.holderName} />
+                        <DetailItem label="Status" value={client.general?.status} />
+                        <DetailItem label="CPF Titular" value={client.general?.holderCpf} />
+                        <DetailItem label="Nome do Responsável" value={client.general?.responsibleName} />
+                        <DetailItem label="CPF do Responsável" value={client.general?.responsibleCpf} />
+                    </FormSection>
+                    <FormSection title="Dados de Adesão e Contato">
+                        <DetailItem label="Profissão" value={client.general?.profession} />
+                        <DetailItem label="Sindicato Filiado" value={client.general?.union} />
+                        <DetailItem label="Administradora" value={client.general?.administrator} />
+                        <DetailItem label="Email Responsável" value={client.general?.email} />
+                        <DetailItem label="Nome Contato" value={client.general?.contactName} />
+                        <DetailItem label="Telefone Contato" value={client.general?.contactPhone} />
+                    </FormSection>
+                </>
+            )}
+
+            {/* Seção de Endereço (Comum a todos) */}
+            <FormSection title="Endereço">
+                <DetailItem label="CEP" value={client.address?.cep} />
+                <DetailItem label="Logradouro" value={client.address?.street} />
+                <DetailItem label="Complemento" value={client.address?.complement} />
+                <DetailItem label="Bairro" value={client.address?.neighborhood} />
+                <DetailItem label="Cidade" value={client.address?.city} />
+                <DetailItem label="Estado" value={client.address?.state} />
+            </FormSection>
+        </>
+    );
+};
+    return (
         <div className="p-4 sm:p-6 lg:p-8">
-            <div className="flex justify-between items-start mb-6 gap-4">
+            <div className="flex justify-between items-start mb-6 gap-4 flex-wrap">
                 <div>
                     <button onClick={onBack} className="flex items-center text-sm text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white mb-2"><ChevronLeftIcon className="h-4 w-4 mr-1" /> Voltar</button>
                     <h2 className="text-3xl font-bold text-gray-900 dark:text-white">{client?.general?.companyName || client?.general?.holderName}</h2>
                 </div>
                 <div className="flex gap-2">
+                    <Button variant="outline" onClick={handleExportSingleClient} disabled={isExporting}>
+                        {isExporting ? 'Exportando...' : <><DownloadIcon className="h-4 w-4 mr-2" />Exportar</>}
+                    </Button>
                     <Button variant="outline" onClick={() => onEdit(client, { initialTab: activeTab })}><PencilIcon className="h-4 w-4 mr-2" />Editar</Button>
                     <Button variant="destructive" onClick={handleDelete}><Trash2Icon className="h-4 w-4 mr-2" />Excluir</Button>
                 </div>
@@ -1955,7 +2382,6 @@ function ClientDetails({ client, onBack, onEdit }) {
             <GlassPanel className="p-6">
                 <Tabs value={activeTab} onValueChange={setActiveTab}>
                     <TabsList>
-                        {/* MUDANÇA NOS VALUES ABAIXO */}
                         <TabsTrigger value="general">Visão Geral</TabsTrigger>
                         <TabsTrigger value="contracts">Contratos</TabsTrigger>
                         <TabsTrigger value="beneficiaries">Beneficiários</TabsTrigger>
@@ -1974,7 +2400,6 @@ function ClientDetails({ client, onBack, onEdit }) {
         </div>
     );
 };
-
 function CorporatePage({ onNavigate }) {
     const { users, operators, addOperator, updateOperator, deleteOperator, companyProfile, updateCompanyProfile, partners, addPartner, deletePartner, clients, leads, tasks } = useData();
     const { user, addUser, deleteUser } = useAuth();

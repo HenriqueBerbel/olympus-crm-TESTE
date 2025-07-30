@@ -3652,31 +3652,41 @@ function DashboardPage({ onNavigate }) {
 
 // --- GERENCIADOR DE TAREFAS AUTOMÁTICAS ---
 function BoletoTaskManager() {
-    const { clients, tasks, users, addTask } = useData();
+    const { clients, tasks, users, addTask, logAction } = useData();
 
     useEffect(() => {
-        if (!clients.length || !users.length || !tasks) return;
+        // Roda apenas uma vez por minuto para evitar execuções excessivas
+        const intervalId = setInterval(() => {
+            if (!clients.length || !users.length || !tasks) return;
 
-        const hoje = new Date();
-        const mesAtual = hoje.getMonth(); // Usar o índice do mês (0-11) para comparações
-        const anoAtual = hoje.getFullYear();
+            const hoje = new Date();
+            const anoAtual = hoje.getFullYear();
+            const mesAtual = hoje.getMonth(); // 0 = Janeiro, 11 = Dezembro
+            const diaAtual = hoje.getDate();
+            
+            console.log("Verificando tarefas de boleto...");
 
-        clients.forEach(client => {
-            (client.contracts || []).forEach(contract => {
-                if (contract.status === 'ativo' && contract.boletoSentDate && contract.boletoResponsibleId) {
+            clients.forEach(client => {
+                (client.contracts || []).forEach(contract => {
+                    if (contract.status !== 'ativo' || !contract.boletoSentDate || !contract.boletoResponsibleId) {
+                        return; // Pula se o contrato não for elegível
+                    }
+
+                    const dataEnvioBase = new Date(contract.boletoSentDate + 'T00:00:00');
+                    const diaEnvioProgramado = dataEnvioBase.getDate();
                     
-                    const dataEnvioBoleto = new Date(contract.boletoSentDate + 'T00:00:00');
-                    const diaEnvio = dataEnvioBoleto.getDate();
-
-                    if (hoje.getDate() >= diaEnvio) {
-                        
-                        // 1. Pega o nome correto do cliente (PME ou PF/Adesão)
+                    // LÓGICA CENTRAL DA CORREÇÃO:
+                    // 1. A tarefa só pode ser criada se o mês e o ano ATUAIS corresponderem ao ciclo de faturamento.
+                    // 2. E o dia ATUAL for igual ou maior que o dia programado para o envio.
+                    const deveCriarEsteMes = new Date(contract.effectiveDate + 'T00:00:00') <= hoje;
+                    if (!deveCriarEsteMes) return;
+                    
+                    if (diaAtual >= diaEnvioProgramado) {
                         const clientDisplayName = client.general?.companyName || client.general?.holderName || 'Cliente Sem Nome';
                         const tituloTarefa = `Enviar Boleto - ${clientDisplayName}`;
 
-                        // 2. A verificação se a tarefa já existe agora é MUITO mais robusta
-                        // Ela verifica se já existe uma tarefa de boleto para ESTE cliente, criada NESTE mês e ano.
-                        const tarefaJaExiste = tasks.some(task => 
+                        // VERIFICAÇÃO ROBUSTA: Checa se já existe uma tarefa de boleto para este cliente, PARA O MÊS E ANO ATUAIS.
+                        const tarefaJaExisteParaEsteMes = tasks.some(task => 
                             task.linkedToId === client.id &&
                             task.title === tituloTarefa &&
                             task.createdAt &&
@@ -3684,8 +3694,9 @@ function BoletoTaskManager() {
                             task.createdAt.toDate().getFullYear() === anoAtual
                         );
 
-                        if (!tarefaJaExiste) {
-                            const dueDate = new Date(anoAtual, mesAtual, diaEnvio);
+                        if (!tarefaJaExisteParaEsteMes) {
+                            console.log(`Criando tarefa para ${clientDisplayName}`);
+                            const dueDate = new Date(anoAtual, mesAtual, diaEnvioProgramado);
                             
                             const description = `Acessar portal da ${contract.planOperator || 'Operadora'} para o boleto de ${mesAtual + 1}/${anoAtual}.\n\nEnviar para o WhatsApp:\nhttps://wa.me/55${(client.general.contactPhone || client.general.phone || '').replace(/\D/g, '')}`;
 
@@ -3696,16 +3707,24 @@ function BoletoTaskManager() {
                                 dueDate: dueDate.toISOString().split('T')[0],
                                 priority: 'Alta',
                                 status: 'Pendente',
+                                color: '#EF4444', // Vermelho para dar destaque
                                 linkedToId: client.id,
-                                linkedToType: 'client'
+                                linkedToType: 'client',
+                                archived: false,
+                                createdAt: serverTimestamp() // Garante que a data de criação seja registrada
                             };
+                            
                             addTask(newTask);
+                            logAction({ actionType: 'CRIAÇÃO AUTOMÁTICA', module: 'Tarefas', description: `Tarefa de envio de boleto para "${clientDisplayName}" criada.`});
                         }
                     }
-                }
+                });
             });
-        });
-    }, [clients, tasks, users, addTask]);
+        }, 60000); // Executa a verificação a cada 60 segundos
+
+        return () => clearInterval(intervalId); // Limpa o intervalo quando o componente é desmontado
+
+    }, [clients, tasks, users, addTask, logAction]);
 
     return null;
 }

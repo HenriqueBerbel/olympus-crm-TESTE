@@ -529,7 +529,56 @@ const DataProvider = ({ children }) => {
     const addKanbanColumn = async (columnData) => { if (!db) return false; try { await addDoc(collection(db, 'kanban_columns'), columnData); return true; } catch (e) { return false; } };
     const deleteKanbanColumn = async (columnId) => { if (!db) return false; try { await deleteDoc(doc(db, 'kanban_columns', columnId)); return true; } catch (e) { return false; } };
     const updateKanbanColumnOrder = async (orderedColumns) => { if (!db) return false; try { const batch = writeBatch(db); orderedColumns.forEach((col, index) => { const docRef = doc(db, 'kanban_columns', col.id); batch.update(docRef, { order: index }); }); await batch.commit(); return true; } catch (e) { return false; } };
-    const toggleEventCompletion = async (event, isCompleted) => { if (!db || !user) return false; const eventDocRef = doc(db, 'completed_events', event.id); try { if (isCompleted) { await setDoc(eventDocRef, { eventId: event.id, completedAt: serverTimestamp(), userId: user.uid, title: event.title }); logAction({ actionType: 'CONCLUSÃO', module: 'Calendário', description: `concluiu o evento: "${event.title}"`}); } else { await deleteDoc(eventDocRef); logAction({ actionType: 'REABERTURA', module: 'Calendário', description: `reabriu o evento: "${event.title}"`}); } return true; } catch (e) { return false; } };
+    const toggleEventCompletion = async (event, isCompleted) => {
+    if (!db || !user) return false;
+    const eventDocRef = doc(db, 'completed_events', event.id);
+
+    try {
+        if (isCompleted) {
+            await setDoc(eventDocRef, { eventId: event.id, completedAt: serverTimestamp(), userId: user.uid, title: event.title });
+            logAction({ actionType: 'CONCLUSÃO', module: 'Calendário', description: `concluiu o evento: "${event.title}"`});
+
+            // [NOVO] LÓGICA DE VÍNCULO COM TAREFAS
+            if (event.type === 'boletoSend') {
+                const { client, originalDate } = event.data; // originalDate está no formato "AAAA-MM"
+                
+                // Encontra a tarefa de boleto correspondente para este cliente e ciclo de faturamento
+                const taskToUpdate = data.tasks.find(t => 
+                    t.isBoletoTask && 
+                    t.linkedToId === client.id && 
+                    t.boletoCycle === originalDate
+                );
+
+                if (taskToUpdate) {
+                    const conclusionColumn = data.taskColumns.find(c => c.isConclusion);
+                    if (conclusionColumn) {
+                        // Atualiza a tarefa, movendo-a para a coluna de conclusão
+                        await updateTask(taskToUpdate.id, { 
+                            status: conclusionColumn.title,
+                            completedAt: serverTimestamp() 
+                        });
+                        toast({ title: "Tarefa Atualizada!", description: `A tarefa de ${client.general.holderName || client.general.companyName} foi movida para concluída.` });
+                    } else {
+                        // Caso não haja coluna de conclusão, apenas conclui a tarefa no status atual
+                        await updateTask(taskToUpdate.id, { 
+                            status: 'Concluída', // Fallback
+                            completedAt: serverTimestamp() 
+                        });
+                    }
+                }
+            }
+        } else {
+            await deleteDoc(eventDocRef);
+            logAction({ actionType: 'REABERTURA', module: 'Calendário', description: `reabriu o evento: "${event.title}"`});
+        }
+        return true;
+    } catch (e) {
+        console.error("Erro ao concluir evento:", e);
+        return false;
+    }
+};
+
+    
     const addPartner = async (partnerData) => { if(!db) return false; try { await addDoc(collection(db, "partners"), partnerData); logAction({ actionType: 'CRIAÇÃO', module: 'Corporativo', description: `adicionou o parceiro externo ${partnerData.name}.` }); return true; } catch (e) { return false; } };
     const deletePartner = async (partnerId, partnerName) => { if(!db) return false; try { await deleteDoc(doc(db, "partners", partnerId)); logAction({ actionType: 'EXCLUSÃO', module: 'Corporativo', description: `removeu o parceiro externo ${partnerName}.` }); return true; } catch (e) { return false; } };
 
@@ -3651,20 +3700,18 @@ function DashboardPage({ onNavigate }) {
 }
 
 // --- GERENCIADOR DE TAREFAS AUTOMÁTICAS ---
+// --- GERENCIADOR DE TAREFAS AUTOMÁTICAS ---
 function BoletoTaskManager() {
     const { clients, tasks, users, addTask, logAction } = useData();
 
     useEffect(() => {
-        // Roda apenas uma vez por minuto para evitar execuções excessivas
-        const intervalId = setInterval(() => {
-            if (!clients.length || !users.length || !tasks) return;
+        const checkAndCreateTasks = () => {
+            if (!clients.length || !users.length) return;
 
             const hoje = new Date();
             const anoAtual = hoje.getFullYear();
             const mesAtual = hoje.getMonth(); // 0 = Janeiro, 11 = Dezembro
             const diaAtual = hoje.getDate();
-            
-            console.log("Verificando tarefas de boleto...");
 
             clients.forEach(client => {
                 (client.contracts || []).forEach(contract => {
@@ -3675,27 +3722,22 @@ function BoletoTaskManager() {
                     const dataEnvioBase = new Date(contract.boletoSentDate + 'T00:00:00');
                     const diaEnvioProgramado = dataEnvioBase.getDate();
                     
-                    // LÓGICA CENTRAL DA CORREÇÃO:
-                    // 1. A tarefa só pode ser criada se o mês e o ano ATUAIS corresponderem ao ciclo de faturamento.
-                    // 2. E o dia ATUAL for igual ou maior que o dia programado para o envio.
-                    const deveCriarEsteMes = new Date(contract.effectiveDate + 'T00:00:00') <= hoje;
-                    if (!deveCriarEsteMes) return;
-                    
+                    // Condição: Só considera criar a tarefa se o dia atual for igual ou maior que o dia programado para envio
                     if (diaAtual >= diaEnvioProgramado) {
-                        const clientDisplayName = client.general?.companyName || client.general?.holderName || 'Cliente Sem Nome';
-                        const tituloTarefa = `Enviar Boleto - ${clientDisplayName}`;
-
-                        // VERIFICAÇÃO ROBUSTA: Checa se já existe uma tarefa de boleto para este cliente, PARA O MÊS E ANO ATUAIS.
-                        const tarefaJaExisteParaEsteMes = tasks.some(task => 
+                        
+                        // Define o ciclo de faturamento atual (ex: "2025-07")
+                        const cicloAtual = `${anoAtual}-${String(mesAtual + 1).padStart(2, '0')}`;
+                        
+                        // VERIFICAÇÃO FINAL: Já existe uma tarefa para este cliente neste ciclo?
+                        const tarefaJaExisteParaEsteCiclo = tasks.some(task => 
+                            task.isBoletoTask &&
                             task.linkedToId === client.id &&
-                            task.title === tituloTarefa &&
-                            task.createdAt &&
-                            task.createdAt.toDate().getMonth() === mesAtual &&
-                            task.createdAt.toDate().getFullYear() === anoAtual
+                            task.boletoCycle === cicloAtual
                         );
 
-                        if (!tarefaJaExisteParaEsteMes) {
-                            console.log(`Criando tarefa para ${clientDisplayName}`);
+                        if (!tarefaJaExisteParaEsteCiclo) {
+                            const clientDisplayName = client.general?.companyName || client.general?.holderName || 'Cliente Sem Nome';
+                            const tituloTarefa = `Enviar Boleto - ${clientDisplayName}`;
                             const dueDate = new Date(anoAtual, mesAtual, diaEnvioProgramado);
                             
                             const description = `Acessar portal da ${contract.planOperator || 'Operadora'} para o boleto de ${mesAtual + 1}/${anoAtual}.\n\nEnviar para o WhatsApp:\nhttps://wa.me/55${(client.general.contactPhone || client.general.phone || '').replace(/\D/g, '')}`;
@@ -3711,7 +3753,8 @@ function BoletoTaskManager() {
                                 linkedToId: client.id,
                                 linkedToType: 'client',
                                 archived: false,
-                                createdAt: serverTimestamp() // Garante que a data de criação seja registrada
+                                isBoletoTask: true, // Identificador chave para o vínculo
+                                boletoCycle: cicloAtual // Identificador do ciclo
                             };
                             
                             addTask(newTask);
@@ -3720,9 +3763,13 @@ function BoletoTaskManager() {
                     }
                 });
             });
-        }, 60000); // Executa a verificação a cada 60 segundos
+        };
+        
+        // Roda a verificação uma vez ao carregar e depois a cada 5 minutos
+        checkAndCreateTasks();
+        const intervalId = setInterval(checkAndCreateTasks, 300000); // 300000 ms = 5 minutos
 
-        return () => clearInterval(intervalId); // Limpa o intervalo quando o componente é desmontado
+        return () => clearInterval(intervalId);
 
     }, [clients, tasks, users, addTask, logAction]);
 

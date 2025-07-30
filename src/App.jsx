@@ -3701,74 +3701,86 @@ function DashboardPage({ onNavigate }) {
 
 // --- GERENCIADOR DE TAREFAS AUTOMÁTICAS ---
 function BoletoTaskManager() {
-    const { tasks, users, addTask, logAction, actionableEvents } = useData();
+    const { tasks, users, addTask, logAction, actionableEvents } = useData();
+    // [NOVA LINHA] Adiciona uma referência para controlar se a sincronização está em andamento.
+    const isSyncing = useRef(false);
 
-    useEffect(() => {
-        const syncEventsToTasks = () => {
-            if (!actionableEvents.length || !users.length) return;
+    useEffect(() => {
+        // [ALTERAÇÃO] Transforma a função em async para usar await
+        const syncEventsToTasks = async () => {
+            // [NOVO BLOCO] Adiciona o "bloqueio" para evitar execuções simultâneas
+            if (isSyncing.current) {
+                console.log("Sincronização de boletos já em andamento. Ignorando nova chamada.");
+                return;
+            }
+            isSyncing.current = true;
 
-            const hoje = new Date();
-            hoje.setHours(0, 0, 0, 0); // Zera o horário para comparar apenas a data
+            try {
+                if (!actionableEvents.length || !users.length) return;
 
-            // Filtra apenas eventos de "Enviar Boleto" que deveriam acontecer até hoje
-            const pendingBoletoEvents = actionableEvents.filter(event => {
-                if (event.type !== 'boletoSend') return false;
-                const eventDate = new Date(event.date);
-                eventDate.setHours(0, 0, 0, 0);
-                return eventDate <= hoje;
-            });
+                const hoje = new Date();
+                hoje.setHours(0, 0, 0, 0);
 
-            pendingBoletoEvents.forEach(event => {
-                const { client, contract, originalDate } = event.data;
-                const clientDisplayName = client.general?.companyName || client.general?.holderName || 'Cliente Sem Nome';
-                
-                // VERIFICAÇÃO ÚNICA E DEFINITIVA:
-                // Já existe uma tarefa física para este cliente e este ciclo de boleto?
-                const taskAlreadyExists = tasks.some(task => 
-                    task.isBoletoTask &&
-                    task.linkedToId === client.id &&
-                    task.boletoCycle === originalDate
-                );
+                const pendingBoletoEvents = actionableEvents.filter(event => {
+                    if (event.type !== 'boletoSend') return false;
+                    const eventDate = new Date(event.date);
+                    eventDate.setHours(0, 0, 0, 0);
+                    return eventDate <= hoje;
+                });
 
-                // Se a tarefa NÃO existe, crie-a.
-                if (!taskAlreadyExists) {
-                    console.log(`SINCRONIZANDO: Criando tarefa de boleto para ${clientDisplayName}, ciclo ${originalDate}`);
+                // [ALTERAÇÃO] Usa um loop for...of para lidar corretamente com chamadas assíncronas
+                for (const event of pendingBoletoEvents) {
+                    const { client, contract, originalDate } = event.data;
+                    const clientDisplayName = client.general?.companyName || client.general?.holderName || 'Cliente Sem Nome';
 
-                    const tituloTarefa = `Enviar Boleto - ${clientDisplayName}`;
-                    const description = `Acessar portal da ${contract.planOperator || 'Operadora'} para o boleto de ${originalDate.split('-')[1]}/${originalDate.split('-')[0]}.\n\nEnviar para o WhatsApp:\nhttps://wa.me/55${(client.general.contactPhone || client.general.phone || '').replace(/\D/g, '')}`;
+                    // [LÓGICA CRÍTICA ALTERADA]
+                    // Em vez de usar a lista local 'tasks', consultamos diretamente o Firestore.
+                    const tasksRef = collection(db, 'tasks');
+                    const q = query(tasksRef,
+                        where('isBoletoTask', '==', true),
+                        where('linkedToId', '==', client.id),
+                        where('boletoCycle', '==', originalDate)
+                    );
+                    const querySnapshot = await getDocs(q);
+                    const taskAlreadyExists = !querySnapshot.empty;
 
-                    const newTask = {
-                        title: tituloTarefa,
-                        description: description,
-                        assignedTo: contract.boletoResponsibleId,
-                        dueDate: event.date.toISOString().split('T')[0],
-                        priority: 'Alta',
-                        status: 'Pendente',
-                        color: '#EF4444',
-                        linkedToId: client.id,
-                        linkedToType: 'client',
-                        archived: false,
-                        isBoletoTask: true,
-                        boletoCycle: originalDate 
-                    };
-                    
-                    addTask(newTask);
-                    logAction({ actionType: 'CRIAÇÃO AUTOMÁTICA', module: 'Tarefas', description: `Tarefa de boleto para "${clientDisplayName}" criada via sincronização.`});
-                }
-            });
-        };
+                    if (!taskAlreadyExists) {
+                        console.log(`SINCRONIZANDO: Criando tarefa de boleto para ${clientDisplayName}, ciclo ${originalDate}`);
+                        const tituloTarefa = `Enviar Boleto - ${clientDisplayName}`;
+                        const description = `Acessar portal da ${contract.planOperator || 'Operadora'} para o boleto de ${originalDate.split('-')[1]}/${originalDate.split('-')[0]}.\n\nEnviar para o WhatsApp:\nhttps://wa.me/55${(client.general.contactPhone || client.general.phone || '').replace(/\D/g, '')}`;
 
-        // Roda a sincronização a cada 5 minutos para garantir consistência
-        const intervalId = setInterval(syncEventsToTasks, 300000); // 5 minutos
-        
-        // Roda uma vez no início também
-        setTimeout(syncEventsToTasks, 3000); // Espera 3s para os dados iniciais carregarem
+                        const newTask = {
+                            title: tituloTarefa,
+                            description: description,
+                            assignedTo: contract.boletoResponsibleId,
+                            dueDate: event.date.toISOString().split('T')[0],
+                            priority: 'Alta',
+                            status: 'Pendente',
+                            color: '#EF4444',
+                            linkedToId: client.id,
+                            linkedToType: 'client',
+                            archived: false,
+                            isBoletoTask: true,
+                            boletoCycle: originalDate
+                        };
+                        
+                        await addTask(newTask);
+                        logAction({ actionType: 'CRIAÇÃO AUTOMÁTICA', module: 'Tarefas', description: `Tarefa de boleto para "${clientDisplayName}" criada via sincronização.`});
+                    }
+                }
+            } finally {
+                // [NOVO BLOCO] Libera o "bloqueio" ao final da execução.
+                isSyncing.current = false;
+            }
+        };
 
-        return () => clearInterval(intervalId);
+        const intervalId = setInterval(syncEventsToTasks, 300000);
+        setTimeout(syncEventsToTasks, 3000);
 
-    }, [actionableEvents, tasks, users, addTask, logAction]);
+        return () => clearInterval(intervalId);
+    }, [actionableEvents, tasks, users, addTask, logAction]); // Mantenha as dependências
 
-    return null;
+    return null;
 }
 // --- ORQUESTRADOR PRINCIPAL DA APLICAÇÃO ---
 function MainApp() {

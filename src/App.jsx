@@ -58,7 +58,35 @@ const HeartPulseIcon = memo((props) => <IconWrapper {...props}><path d="M19 14c1
 const ActivityIcon = memo((props) => <IconWrapper {...props}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></IconWrapper>);
 
 const cn = (...inputs) => inputs.flat().filter(Boolean).join(' ');
-const calculateAge = (dob) => { if (!dob) return null; const today = new Date(); const birthDate = new Date(dob); let age = today.getFullYear() - birthDate.getFullYear(); const m = today.getMonth() - birthDate.getMonth(); if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) { age--; } return age; };
+const calculateAge = (dob) => { // A data 'dob' deve estar no formato 'YYYY-MM-DD'
+    if (!dob) return null;
+
+    // 1. ANÁLISE ROBUSTA DA DATA
+    // Dividimos a string 'YYYY-MM-DD' em partes para criar a data.
+    // Isso evita que o navegador tente "adivinhar" o formato e erre.
+    // O JS lida com meses de 0 (Jan) a 11 (Dez), por isso subtraímos 1 do mês.
+    const parts = dob.split('-');
+    const year = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10) - 1; 
+    const day = parseInt(parts[2], 10);
+    const birthDate = new Date(year, month, day);
+
+    // 2. VERIFICAÇÃO DE VALIDADE
+    // Se, por algum motivo, a data for inválida, retornamos nulo.
+    if (isNaN(birthDate.getTime())) {
+        return null;
+    }
+
+    // 3. CÁLCULO DA IDADE (LÓGICA ORIGINAL MANTIDA)
+    const today = new Date();
+    let age = today.getFullYear() - birthDate.getFullYear();
+    const m = today.getMonth() - birthDate.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+        age--;
+    }
+    return age;
+};
+
 const formatDate = (dateString) => dateString ? new Date(dateString + 'T00:00:00').toLocaleDateString('pt-BR') : 'N/A';
 const formatDateTime = (timestamp) => timestamp?.toDate ? timestamp.toDate().toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : 'N/A';
 const formatCurrency = (value) => `R$ ${new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value || 0)}`;
@@ -464,37 +492,93 @@ const DataProvider = ({ children }) => {
             (client.contracts || []).forEach(contract => {
                 if (contract.status !== 'ativo') return;
                 
-                const end = contract.renewalDate ? new Date(contract.renewalDate + 'T23:59:59') : new Date(new Date().getFullYear() + 5, 0, 1);
+                // O nome original da propriedade é `renewalDate`, mas no JSON de exemplo é `dataRenovacaoContrato`.
+                // Usaremos `renewalDate` como está no código, mas certifique-se que o nome no seu Firestore é o mesmo.
+                const renewalDate = contract.renewalDate ? new Date(contract.renewalDate + 'T23:59:59') : new Date(new Date().getFullYear() + 5, 0, 1);
 
-                // Lógica de Envio de Boleto
+                // --- LÓGICA DE ENVIO DE BOLETO (REATORADA) ---
                 if (contract.boletoSentDate) {
-                    let current = new Date(contract.boletoSentDate + 'T00:00:00');
-                    while (current <= end) {
-                        const originalDateStr = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`;
-                        const exception = (client.boletoExceptions || []).find(ex => ex.originalDate === originalDateStr);
-                        const eventDate = exception 
-                            ? new Date(exception.modifiedDate + 'T00:00:00') 
-                            : new Date(current.getFullYear(), current.getMonth(), new Date(contract.boletoSentDate + 'T00:00:00').getDate());
+                    // 1. DEFINIR O PONTO DE PARTIDA
+                    // Nunca começaremos a gerar eventos antes do início do mês atual.
+                    // Isso resolve o problema de clientes antigos.
+                    const hoje = new Date();
+                    const inicioDoMesAtual = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+                    
+                    const dataBaseEnvio = new Date(contract.boletoSentDate + 'T00:00:00');
+                    
+                    // O loop começa na data de envio do boleto OU no início do mês atual, o que for MAIS RECENTE.
+                    let dataCorrente = new Date(Math.max(dataBaseEnvio, inicioDoMesAtual));
+
+                    // 2. LOOP OTIMIZADO
+                    // O loop agora começa no presente e vai até a data de renovação.
+                    while (dataCorrente <= renewalDate) {
+                        const ano = dataCorrente.getFullYear();
+                        const mes = dataCorrente.getMonth(); // 0-11
+                        const diaOriginalEnvio = dataBaseEnvio.getDate(); // Pega o dia original (ex: 25)
+
+                        // Identificador único para este ciclo de faturamento
+                        const cicloOriginal = `${ano}-${String(mes + 1).padStart(2, '0')}`; // Ex: "2025-07"
                         
-                        const eventId = `boleto-${client.id}-${contract.id}-${originalDateStr}`;
-                        addEvent({ type: 'boletoSend', id: eventId, date: eventDate, data: { client, contract, originalDate: originalDateStr }, title: `Enviar Boleto: ${client.general.holderName || client.general.companyName}`, color: 'bg-cyan-500', icon: FileTextIcon });
-                        current.setMonth(current.getMonth() + 1);
+                        // 3. LÓGICA DE EXCEÇÃO (ADIAR)
+                        // Verifica se existe uma exceção manual para este ciclo.
+                        const excecao = (client.boletoExceptions || []).find(ex => ex.originalDate === cicloOriginal);
+                        
+                        const dataDoEvento = excecao
+                            ? new Date(excecao.modifiedDate + 'T00:00:00') // Usa a data adiada
+                            : new Date(ano, mes, diaOriginalEnvio);      // Usa a data recorrente padrão
+
+                        // Só adiciona o evento se a data final for válida
+                        if (!isNaN(dataDoEvento.getTime())) {
+                            const eventId = `boleto-${client.id}-${contract.id}-${cicloOriginal}`;
+                            addEvent({ 
+                                type: 'boletoSend', 
+                                id: eventId, 
+                                date: dataDoEvento, 
+                                data: { client, contract, originalDate: cicloOriginal }, 
+                                title: `Enviar Boleto: ${client.general.holderName || client.general.companyName}`, 
+                                color: 'bg-cyan-500', 
+                                icon: FileTextIcon 
+                            });
+                        }
+                        
+                        // 4. INCREMENTO SEGURO DO MÊS
+                        // Avança para o próximo mês.
+                        dataCorrente.setMonth(dataCorrente.getMonth() + 1);
                     }
+                }
+
+                // Lógica de Vencimento de Boleto (Otimizada similarmente)
+                // O nome original da propriedade é `effectiveDate`, mas no JSON de exemplo é `dataVigencia`.
+                // Usaremos `effectiveDate` como está no código.
+                if (contract.monthlyDueDate && contract.effectiveDate) {
+                     const hoje = new Date();
+                     const inicioDoMesAtual = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+                     const dataBaseVigencia = new Date(contract.effectiveDate + 'T00:00:00');
+
+                     let dataCorrente = new Date(Math.max(dataBaseVigencia, inicioDoMesAtual));
+
+                     while(dataCorrente <= renewalDate) {
+                         const diaVencimento = parseInt(contract.monthlyDueDate, 10);
+                         const dataDoEvento = new Date(dataCorrente.getFullYear(), dataCorrente.getMonth(), diaVencimento);
+                        
+                         if (!isNaN(dataDoEvento.getTime())) {
+                             addEvent({ 
+                                 type: 'boletoDue', 
+                                 id: `due-${client.id}-${contract.id}-${dataDoEvento.toISOString()}`, 
+                                 date: dataDoEvento, 
+                                 data: { client, contract }, 
+                                 title: `Vencimento: ${client.general.holderName || client.general.companyName}`, 
+                                 color: 'bg-yellow-500', 
+                                 icon: AlertTriangleIcon 
+                             });
+                         }
+                         dataCorrente.setMonth(dataCorrente.getMonth() + 1);
+                     }
                 }
                 
-                // Lógica de Vencimento de Boleto
-                if (contract.monthlyDueDate && contract.effectiveDate) {
-                    let current = new Date(contract.effectiveDate + 'T00:00:00');
-                    while(current <= end) {
-                        const dueDate = new Date(current.getFullYear(), current.getMonth(), parseInt(contract.monthlyDueDate, 10));
-                        addEvent({ type: 'boletoDue', id: `due-${client.id}-${contract.id}-${dueDate.toISOString()}`, date: dueDate, data: { client, contract }, title: `Vencimento: ${client.general.holderName || client.general.companyName}`, color: 'bg-yellow-500', icon: AlertTriangleIcon });
-                        current.setMonth(current.getMonth() + 1);
-                    }
-                }
-
-                // Lógica de Renovação de Contrato
+                // Lógica de Renovação de Contrato (permanece a mesma)
                 if (contract.renewalDate) {
-                    addEvent({ type: 'renewal', id: `renewal-${client.id}-${contract.id}`, date: new Date(contract.renewalDate + 'T00:00:00'), data: { client, contract }, title: `Renovação: ${client.general.holderName || client.general.companyName}`, color: 'bg-violet-500', icon: AwardIcon });
+                     addEvent({ type: 'renewal', id: `renewal-${client.id}-${contract.id}`, date: new Date(contract.renewalDate + 'T00:00:00'), data: { client, contract }, title: `Renovação: ${client.general.holderName || client.general.companyName}`, color: 'bg-violet-500', icon: AwardIcon });
                 }
             });
         });
@@ -3701,86 +3785,125 @@ function DashboardPage({ onNavigate }) {
 
 // --- GERENCIADOR DE TAREFAS AUTOMÁTICAS ---
 function BoletoTaskManager() {
-    const { tasks, users, addTask, logAction, actionableEvents } = useData();
-    // [NOVA LINHA] Adiciona uma referência para controlar se a sincronização está em andamento.
-    const isSyncing = useRef(false);
+    // 1. OBTENÇÃO DE DADOS E FUNÇÕES
+    // A função `addTask` já está no context e faz o log, então a usamos.
+    const { actionableEvents, users, addTask, logAction } = useData();
 
-    useEffect(() => {
-        // [ALTERAÇÃO] Transforma a função em async para usar await
-        const syncEventsToTasks = async () => {
-            // [NOVO BLOCO] Adiciona o "bloqueio" para evitar execuções simultâneas
-            if (isSyncing.current) {
-                console.log("Sincronização de boletos já em andamento. Ignorando nova chamada.");
-                return;
-            }
-            isSyncing.current = true;
+    // 2. CONTROLE DE EXECUÇÃO
+    // Usamos useRef para evitar que a função rode múltiplas vezes se o componente re-renderizar rápido.
+    // Isso garante que apenas uma sincronização ocorra por vez.
+    const isSyncing = useRef(false);
 
-            try {
-                if (!actionableEvents.length || !users.length) return;
+    useEffect(() => {
+        const syncEventsToTasks = async () => {
+            // 3. TRAVA DE SEGURANÇA (PREVENÇÃO DE CONCORRÊNCIA)
+            if (isSyncing.current) {
+                console.log("BoletoTaskManager: Sincronização já em andamento. Ignorando nova chamada.");
+                return;
+            }
+            isSyncing.current = true;
+            console.log("BoletoTaskManager: Iniciando sincronização de tarefas de boleto...");
 
-                const hoje = new Date();
-                hoje.setHours(0, 0, 0, 0);
+            try {
+                // Condição de saída se os dados essenciais não estiverem prontos.
+                if (!actionableEvents.length || !users.length || !db) {
+                     console.log("BoletoTaskManager: Dados necessários ainda não carregados.");
+                     isSyncing.current = false; // Libera a trava
+                     return;
+                }
 
-                const pendingBoletoEvents = actionableEvents.filter(event => {
-                    if (event.type !== 'boletoSend') return false;
-                    const eventDate = new Date(event.date);
-                    eventDate.setHours(0, 0, 0, 0);
-                    return eventDate <= hoje;
-                });
+                const hoje = new Date();
+                hoje.setHours(0, 0, 0, 0); // Zera o horário para comparações de data precisas.
 
-                // [ALTERAÇÃO] Usa um loop for...of para lidar corretamente com chamadas assíncronas
-                for (const event of pendingBoletoEvents) {
-                    const { client, contract, originalDate } = event.data;
-                    const clientDisplayName = client.general?.companyName || client.general?.holderName || 'Cliente Sem Nome';
+                // 4. FILTRO INTELIGENTE DE EVENTOS
+                // Filtramos APENAS os eventos de envio de boleto que deveriam ter sido criados ATÉ HOJE.
+                // Isso inclui eventos de hoje e os que possam estar atrasados (ex: o sistema ficou offline).
+                const pendingBoletoEvents = actionableEvents.filter(event => {
+                    if (event.type !== 'boletoSend') return false;
+                    const eventDate = new Date(event.date);
+                    eventDate.setHours(0, 0, 0, 0);
+                    // A data do evento deve ser igual ou anterior a hoje.
+                    // E NUNCA deve ser de um ano anterior ao ano corrente para evitar processar um histórico muito grande.
+                    return eventDate <= hoje && eventDate.getFullYear() >= (hoje.getFullYear() - 1);
+                });
 
-                    // [LÓGICA CRÍTICA ALTERADA]
-                    // Em vez de usar a lista local 'tasks', consultamos diretamente o Firestore.
-                    const tasksRef = collection(db, 'tasks');
-                    const q = query(tasksRef,
-                        where('isBoletoTask', '==', true),
-                        where('linkedToId', '==', client.id),
-                        where('boletoCycle', '==', originalDate)
-                    );
-                    const querySnapshot = await getDocs(q);
-                    const taskAlreadyExists = !querySnapshot.empty;
+                if (pendingBoletoEvents.length === 0) {
+                    console.log("BoletoTaskManager: Nenhuma tarefa de boleto pendente para criar.");
+                    isSyncing.current = false;
+                    return;
+                }
+                
+                // 5. PROCESSAMENTO EM SÉRIE (À PROVA DE ERROS)
+                // Usamos um loop `for...of` que respeita o `await` dentro dele,
+                // garantindo que uma verificação termine antes da próxima começar.
+                for (const event of pendingBoletoEvents) {
+                    const { client, contract, originalDate } = event.data;
+                    const clientDisplayName = client.general?.companyName || client.general?.holderName || 'Cliente Sem Nome';
 
-                    if (!taskAlreadyExists) {
-                        console.log(`SINCRONIZANDO: Criando tarefa de boleto para ${clientDisplayName}, ciclo ${originalDate}`);
-                        const tituloTarefa = `Enviar Boleto - ${clientDisplayName}`;
-                        const description = `Acessar portal da ${contract.planOperator || 'Operadora'} para o boleto de ${originalDate.split('-')[1]}/${originalDate.split('-')[0]}.\n\nEnviar para o WhatsApp:\nhttps://wa.me/55${(client.general.contactPhone || client.general.phone || '').replace(/\D/g, '')}`;
+                    // 6. VERIFICAÇÃO ATÔMICA NO BANCO DE DADOS (O CORAÇÃO DA CORREÇÃO)
+                    // Criamos uma consulta no Firestore para verificar se uma tarefa com marcadores
+                    // únicos (isBoletoTask, linkedToId, boletoCycle) JÁ EXISTE.
+                    const tasksRef = collection(db, 'tasks');
+                    const q = query(tasksRef,
+                        where('isBoletoTask', '==', true),         // Flag que identifica a tarefa
+                        where('linkedToId', '==', client.id),      // ID do cliente
+                        where('boletoCycle', '==', originalDate) // Ciclo único (ex: "2025-07")
+                    );
 
-                        const newTask = {
-                            title: tituloTarefa,
-                            description: description,
-                            assignedTo: contract.boletoResponsibleId,
-                            dueDate: event.date.toISOString().split('T')[0],
-                            priority: 'Alta',
-                            status: 'Pendente',
-                            color: '#EF4444',
-                            linkedToId: client.id,
-                            linkedToType: 'client',
-                            archived: false,
-                            isBoletoTask: true,
-                            boletoCycle: originalDate
-                        };
-                        
-                        await addTask(newTask);
-                        logAction({ actionType: 'CRIAÇÃO AUTOMÁTICA', module: 'Tarefas', description: `Tarefa de boleto para "${clientDisplayName}" criada via sincronização.`});
-                    }
-                }
-            } finally {
-                // [NOVO BLOCO] Libera o "bloqueio" ao final da execução.
-                isSyncing.current = false;
-            }
-        };
+                    const querySnapshot = await getDocs(q);
+                    const taskAlreadyExists = !querySnapshot.empty;
 
-        const intervalId = setInterval(syncEventsToTasks, 300000);
-        setTimeout(syncEventsToTasks, 3000);
+                    // 7. LÓGICA DE CRIAÇÃO CONDICIONAL
+                    // Somente se a consulta retornar vazia, nós criamos a tarefa.
+                    if (!taskAlreadyExists) {
+                        console.log(`BoletoTaskManager: CRIANDO tarefa para ${clientDisplayName}, ciclo ${originalDate}`);
 
-        return () => clearInterval(intervalId);
-    }, [actionableEvents, tasks, users, addTask, logAction]); // Mantenha as dependências
+                        const tituloTarefa = `Enviar Boleto - ${clientDisplayName}`;
+                        const description = `Acessar portal da ${contract.planOperator || 'Operadora'} para o boleto de ${originalDate.split('-')[1]}/${originalDate.split('-')[0]}.\n\nEnviar para o WhatsApp:\nhttps://wa.me/55${(client.general.contactPhone || client.general.phone || '').replace(/\D/g, '')}`;
 
-    return null;
+                        const newTask = {
+                            title: tituloTarefa,
+                            description: description,
+                            assignedTo: contract.boletoResponsibleId,
+                            dueDate: event.date.toISOString().split('T')[0],
+                            priority: 'Alta',
+                            status: 'Pendente',
+                            color: '#0EA5E9', // Cor azul para boletos
+                            linkedToId: client.id,
+                            linkedToType: 'client',
+                            archived: false,
+                            // Flags para a verificação atômica:
+                            isBoletoTask: true,        // Flag booleana
+                            boletoCycle: originalDate  // String única 'AAAA-MM'
+                        };
+
+                        await addTask(newTask); // Usamos a função do context que já faz o log
+                    } else {
+                         console.log(`BoletoTaskManager: TAREFA JÁ EXISTE para ${clientDisplayName}, ciclo ${originalDate}. Ignorando.`);
+                    }
+                }
+            } catch (error) {
+                console.error("BoletoTaskManager: Erro durante a sincronização de tarefas.", error);
+            } finally {
+                // 8. LIBERAÇÃO DA TRAVA
+                // Independentemente de sucesso ou falha, liberamos a trava para a próxima execução.
+                isSyncing.current = false;
+                console.log("BoletoTaskManager: Sincronização finalizada.");
+            }
+        };
+
+        // Roda a sincronização 5 segundos após a inicialização e depois a cada 5 minutos.
+        const initialSyncTimeout = setTimeout(syncEventsToTasks, 5000);
+        const intervalId = setInterval(syncEventsToTasks, 300000); // 5 minutos
+
+        // Limpa o intervalo quando o componente é desmontado
+        return () => {
+            clearTimeout(initialSyncTimeout);
+            clearInterval(intervalId);
+        };
+    }, [actionableEvents, users, addTask, logAction]); // Dependências corretas
+
+    return null; // Este componente não renderiza nada na tela.
 }
 // --- ORQUESTRADOR PRINCIPAL DA APLICAÇÃO ---
 function MainApp() {

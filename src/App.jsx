@@ -58,32 +58,35 @@ const HeartPulseIcon = memo((props) => <IconWrapper {...props}><path d="M19 14c1
 const ActivityIcon = memo((props) => <IconWrapper {...props}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></IconWrapper>);
 
 const cn = (...inputs) => inputs.flat().filter(Boolean).join(' ');
-const calculateAge = (dob) => { // A data 'dob' deve estar no formato 'YYYY-MM-DD'
-    if (!dob) return null;
-
-    // 1. ANÁLISE ROBUSTA DA DATA
-    // Dividimos a string 'YYYY-MM-DD' em partes para criar a data.
-    // Isso evita que o navegador tente "adivinhar" o formato e erre.
-    // O JS lida com meses de 0 (Jan) a 11 (Dez), por isso subtraímos 1 do mês.
-    const parts = dob.split('-');
-    const year = parseInt(parts[0], 10);
-    const month = parseInt(parts[1], 10) - 1; 
-    const day = parseInt(parts[2], 10);
-    const birthDate = new Date(year, month, day);
-
-    // 2. VERIFICAÇÃO DE VALIDADE
-    // Se, por algum motivo, a data for inválida, retornamos nulo.
-    if (isNaN(birthDate.getTime())) {
+const calculateAge = (dob) => { // A data 'dob' DEVE estar no formato 'YYYY-MM-DD'
+    // 1. VERIFICAÇÃO DE SEGURANÇA MÁXIMA
+    // Se a data não existir ou não estiver no formato exato 'AAAA-MM-DD', a função para aqui.
+    if (!dob || !/^\d{4}-\d{2}-\d{2}$/.test(dob)) {
         return null;
     }
 
-    // 3. CÁLCULO DA IDADE (LÓGICA ORIGINAL MANTIDA)
+    // 2. EXTRAÇÃO PURA DOS NÚMEROS (SEM USAR 'new Date')
+    // Em vez de pedir ao JavaScript para interpretar a data, nós apenas pegamos os números.
+    const birthYear = parseInt(dob.substring(0, 4), 10);
+    const birthMonth = parseInt(dob.substring(5, 7), 10); // Mês como ele é (1-12)
+    const birthDay = parseInt(dob.substring(8, 10), 10);
+
+    // 3. PEGAR OS NÚMEROS DA DATA DE HOJE
     const today = new Date();
-    let age = today.getFullYear() - birthDate.getFullYear();
-    const m = today.getMonth() - birthDate.getMonth();
-    if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+    const currentYear = today.getFullYear();
+    const currentMonth = today.getMonth() + 1; // Ajustamos o mês para ser (1-12)
+    const currentDay = today.getDate();
+
+    // 4. CÁLCULO MATEMÁTICO PURO DA IDADE
+    let age = currentYear - birthYear;
+
+    // Se o mês atual é anterior ao mês de aniversário, a pessoa ainda não fez aniversário este ano.
+    // Ou se o mês é o mesmo, mas o dia atual é anterior ao dia do aniversário.
+    // Em ambos os casos, subtraímos 1 da idade.
+    if (currentMonth < birthMonth || (currentMonth === birthMonth && currentDay < birthDay)) {
         age--;
     }
+
     return age;
 };
 

@@ -5,6 +5,81 @@ import { getFirestore, collection, onSnapshot, addDoc, doc, setDoc, updateDoc, d
 import { db, auth } from './firebase.js';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
+
+
+// ===================================================================
+// INÍCIO DA SEÇÃO DE PERMISSÕES - ADICIONE TUDO ABAIXO AQUI
+// ===================================================================
+
+// PASSO 1: DEFINA AS PERMISSÕES PADRÃO PARA CADA FUNÇÃO
+const ROLE_DEFAULTS = {
+    'Corretor': [
+        'viewDashboard', 'manageOwnLeads', 'manageOwnClients', 'manageOwnTasks', 'viewProduction', 'viewCalendar', 'viewProfile'
+    ],
+    'Supervisor': [
+        'viewDashboard', 'manageOwnLeads', 'manageOwnClients', 'manageOwnTasks', 'viewProduction', 'viewCalendar', 'viewProfile', 
+        'viewTeamData' // Permissão para ver dados da equipe
+    ],
+    'AdminEmpresa': [
+        'viewDashboard', 'viewCorporate', 'manageUsers', 'managePartners', 'manageOperators', 'manageCompanyProfile', 'viewProfile'
+    ],
+    'Gerente': [
+        'viewDashboard', 'viewAllLeads', 'viewAllClients', 'viewAllTasks', 'viewAllProduction', 'viewCalendar', 'viewCorporate', 'viewProfile'
+    ],
+    'CEO': [ // CEO pode tudo por padrão, mas ter uma lista ajuda em lógicas futuras
+        'viewAll', 'manageAll', 'viewCommissions', 'viewTimeline', 'managePermissions'
+    ],
+};
+
+// PASSO 2: COLE O CÓDIGO COMPLETO DO HOOK DE PERMISSÕES
+const usePermissions = () => {
+    const { user } = useAuth();
+
+    // Se o usuário ainda não carregou, nega todas as permissões para segurança.
+    if (!user) {
+        return { 
+            can: () => false, 
+            role: 'none', 
+            user: null 
+        };
+    }
+
+    // Define uma role padrão para evitar erros caso o usuário não tenha uma.
+    const role = user.role || 'Corretor';
+
+    /**
+     * A função principal que verifica a permissão.
+     * Ela é a única coisa que outros componentes precisarão usar.
+     * @param {string} action - A chave da permissão a ser verificada (ex: 'viewTimeline').
+     * @returns {boolean} - Retorna true se o usuário tiver permissão, senão false.
+     */
+    const can = (action) => {
+        // Regra MESTRE: O CEO sempre tem acesso a tudo.
+        if (role === 'CEO') {
+            return true;
+        }
+
+        const userOverrides = user.permissions || {};
+
+        // 1. Prioridade Máxima: Verifica se há uma permissão customizada (override).
+        // Se o CEO marcou um toggle específico para este usuário.
+        if (typeof userOverrides[action] === 'boolean') {
+            return userOverrides[action]; // Retorna true ou false, conforme definido no override.
+        }
+
+        // 2. Se não houver override, usa a permissão padrão da ROLE do usuário.
+        const defaultPermissionsForRole = ROLE_DEFAULTS[role] || [];
+        return defaultPermissionsForRole.includes(action);
+    };
+
+    return { user, role, can };
+};
+
+// ===================================================================
+// FIM DA SEÇÃO DE PERMISSÕES
+// ===================================================================
+
 
 
 // --- ÍCONES E UTILITÁRIOS ---
@@ -49,14 +124,13 @@ const AlertTriangleIcon = memo((props) => <IconWrapper {...props}><path d="m21.7
 const RefreshCwIcon = memo((props) => <IconWrapper {...props}><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M3 12a9 9 0 0 1 9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M3 21v-5h5" /></IconWrapper>);
 const TrendingUpIcon = memo((props) => <IconWrapper {...props}><polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" /></IconWrapper>);
 const DollarSignIcon = memo((props) => <IconWrapper {...props}><line x1="12" x2="12" y1="2" y2="22" /><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></IconWrapper>);
-const BarChart2Icon = memo((props) => <IconWrapper {...props}><line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" /></IconWrapper>);
-const PieChartIcon = memo((props) => <IconWrapper {...props}><path d="M21.21 15.89A10 10 0 1 1 8 2.83" /><path d="M22 12A10 10 0 0 0 12 2v10z" /></IconWrapper>);
-const BriefcaseIcon = memo((props) => <IconWrapper {...props}><rect width="20" height="14" x="2" y="7" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></IconWrapper>);
 const AwardIcon = memo((props) => <IconWrapper {...props}><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/></IconWrapper>);
-const ShieldCheckIcon = memo((props) => <IconWrapper {...props}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></IconWrapper>);
-const HeartPulseIcon = memo((props) => <IconWrapper {...props}><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/><path d="M3.22 12.91 1.05 15.09"/><path d="M7.5 12.5 9 14l1.5-1.5"/><path d="M12 11h.01"/><path d="M16.5 12.5 15 14l-1.5-1.5"/><path d="M20.78 12.91 22.95 15.09"/></IconWrapper>);
+const Share2Icon = memo((props) => <IconWrapper {...props}><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></IconWrapper>);
+const ClockIcon = memo((props) => <IconWrapper {...props}><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></IconWrapper>);
+const ArrowUpRightIcon = memo((props) => <IconWrapper {...props}><line x1="7" y1="17" x2="17" y2="7"></line><polyline points="7 7 17 7 17 17"></polyline></IconWrapper>);
+const ArrowDownRightIcon = memo((props) => <IconWrapper {...props}><line x1="7" y1="7" x2="17" y2="17"></line><polyline points="17 7 17 17 7 17"></polyline></IconWrapper>);
 const ActivityIcon = memo((props) => <IconWrapper {...props}><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></IconWrapper>);
-
+const BriefcaseIcon = memo((props) => <IconWrapper {...props}><rect width="20" height="14" x="2" y="7" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></IconWrapper>);
 const cn = (...inputs) => inputs.flat().filter(Boolean).join(' ');
 const calculateAge = (dob) => { // A data 'dob' DEVE estar no formato 'YYYY-MM-DD'
     // 1. VERIFICAÇÃO DE SEGURANÇA MÁXIMA
@@ -458,7 +532,7 @@ const DataProvider = ({ children }) => {
 
     useEffect(() => {
         if (!db) { setData(d => ({ ...d, loading: false })); return; }
-        const collectionsToFetch = { clients: 'clients', leads: 'leads', tasks: 'tasks', users: 'users', operators: 'operators', timeline: 'timeline', commissions: 'commissions', completedEvents: 'completed_events', partners: 'partners' };
+        const collectionsToFetch = { clients: 'clients', leads: 'leads', tasks: 'tasks', users: 'users', operators: 'operators', timeline: 'timeline', commissions: 'commissions', completedEvents: 'completed_events', partners: 'partners', productions: 'productions' };
         
         const unsubscribes = Object.entries(collectionsToFetch).map(([stateKey, collectionName]) => {
             const q = collectionName === 'timeline' ? query(collection(db, collectionName), orderBy('timestamp', 'desc')) : collection(db, collectionName);
@@ -669,8 +743,42 @@ const DataProvider = ({ children }) => {
     const addPartner = async (partnerData) => { if(!db) return false; try { await addDoc(collection(db, "partners"), partnerData); logAction({ actionType: 'CRIAÇÃO', module: 'Corporativo', description: `adicionou o parceiro externo ${partnerData.name}.` }); return true; } catch (e) { return false; } };
     const deletePartner = async (partnerId, partnerName) => { if(!db) return false; try { await deleteDoc(doc(db, "partners", partnerId)); logAction({ actionType: 'EXCLUSÃO', module: 'Corporativo', description: `removeu o parceiro externo ${partnerName}.` }); return true; } catch (e) { return false; } };
 
+    const addProduction = async (productionData) => { 
+    if(!db) return null; 
+    try { 
+        const docRef = await addDoc(collection(db, "productions"), { ...productionData, createdAt: serverTimestamp() }); 
+        logAction({ actionType: 'CRIAÇÃO', module: 'Produção', description: `lançou a produção para ${productionData.clientName}.` }); 
+        return { id: docRef.id, ...productionData }; 
+    } catch (e) { 
+        console.error("Erro ao adicionar produção:", e);
+        return null; 
+    } 
+};
 
-    const value = { ...data, actionableEvents, getClientById: (id) => data.clients.find(c => c.id === id), addClient, updateClient, deleteClient, addLead, updateLead, deleteLead, convertLeadToClient, addTask, updateTask, deleteTask, addOperator, deleteOperator, updateCompanyProfile, addCommission, updateCommission, deleteCommission, addKanbanColumn, deleteKanbanColumn, updateKanbanColumnOrder, toggleEventCompletion, logAction, addPartner, deletePartner };
+const updateProduction = async (productionId, updatedData) => { 
+    if (!db) return false; 
+    try { 
+        await updateDoc(doc(db, "productions", productionId), updatedData); 
+        logAction({ actionType: 'EDIÇÃO', module: 'Produção', description: `atualizou a produção de ${updatedData.clientName}.` }); 
+        return true; 
+    } catch (e) { 
+        console.error("Erro ao atualizar produção:", e);
+        return false; 
+    } 
+};
+
+const deleteProduction = async (productionId, clientName) => { 
+    if(!db) return false; 
+    try { 
+        await deleteDoc(doc(db, "productions", productionId)); 
+        logAction({ actionType: 'EXCLUSÃO', module: 'Produção', description: `excluiu a produção de ${clientName}.`}); 
+        return true; 
+    } catch (e) { 
+        return false; 
+    } 
+};
+
+    const value = { ...data, actionableEvents, getClientById: (id) => data.clients.find(c => c.id === id), addClient, updateClient, deleteClient, addLead, updateLead, deleteLead, convertLeadToClient, addTask, updateTask, deleteTask, addOperator, deleteOperator, updateCompanyProfile, addCommission, updateCommission, deleteCommission, addKanbanColumn, deleteKanbanColumn, updateKanbanColumnOrder, toggleEventCompletion, logAction, addPartner, deletePartner, addProduction, updateProduction, deleteProduction};
     return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
 };
 const useData = () => useContext(DataContext);
@@ -1571,27 +1679,53 @@ const CredentialModal = ({ isOpen, onClose, onSave, credential }) => {
     );
 };
 const AddCollaboratorModal = ({ isOpen, onClose, onSave }) => {
-    const [formData, setFormData] = useState({ name: '', email: '', password: '', permissionLevel: 'Corretor', supervisorId: '' });
+    const [formData, setFormData] = useState({ name: '', email: '', password: '', role: 'Corretor', supervisorId: '' });
     const { users } = useData();
     const handleChange = (e) => setFormData(prev => ({...prev, [e.target.name]: e.target.value }));
+    
+    useEffect(() => {
+      // Reseta o formulário quando o modal é fechado/reaberto
+      if (isOpen) {
+        setFormData({ name: '', email: '', password: '', role: 'Corretor', supervisorId: '' });
+      }
+    }, [isOpen]);
+
     const handleSubmit = (e) => {
         e.preventDefault();
         onSave(formData);
-        setFormData({ name: '', email: '', password: '', permissionLevel: 'Corretor', supervisorId: '' });
     };
+
     return (
         <Modal isOpen={isOpen} onClose={onClose} title="Adicionar Novo Colaborador">
             <form onSubmit={handleSubmit} className="space-y-4">
-                <div><Label>Nome Completo</Label><Input name="name" onChange={handleChange} required /></div>
-                <div><Label>Email</Label><Input type="email" name="email" onChange={handleChange} required /></div>
-                <div><Label>Senha</Label><Input type="text" name="password" onChange={handleChange} required /></div>
-                <div><Label>Nível de Permissão</Label><Select name="permissionLevel" value={formData.permissionLevel} onChange={handleChange}><option>Corretor</option><option>Supervisor</option><option>Admin</option></Select></div>
-                {formData.permissionLevel === 'Corretor' && (<div><Label>Vincular ao Supervisor</Label><Select name="supervisorId" value={formData.supervisorId} onChange={handleChange}><option value="">Nenhum</option>{users.filter(u => u.permissionLevel === 'Supervisor').map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</Select></div>)}
+                <div><Label>Nome Completo</Label><Input name="name" value={formData.name} onChange={handleChange} required /></div>
+                <div><Label>Email</Label><Input type="email" name="email" value={formData.email} onChange={handleChange} required /></div>
+                <div><Label>Senha</Label><Input type="password" name="password" value={formData.password} onChange={handleChange} required /></div>
+                <div>
+                    <Label>Cargo (Nível de Permissão)</Label>
+                    <Select name="role" value={formData.role} onChange={handleChange}>
+                        <option value="Corretor">Corretor</option>
+                        <option value="Supervisor">Supervisor</option>
+                        <option value="AdminEmpresa">Admin da Empresa</option>
+                        <option value="Gerente">Gerente</option>
+                        <option value="CEO">Super Admin (CEO)</option>
+                    </Select>
+                </div>
+                {formData.role === 'Corretor' && (
+                    <div>
+                        <Label>Vincular ao Supervisor</Label>
+                        <Select name="supervisorId" value={formData.supervisorId} onChange={handleChange}>
+                            <option value="">Nenhum</option>
+                            {users.filter(u => u.role === 'Supervisor').map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                        </Select>
+                    </div>
+                )}
                 <div className="flex justify-end gap-4 pt-4"><Button type="button" variant="outline" onClick={onClose}>Cancelar</Button><Button type="submit">Adicionar</Button></div>
             </form>
         </Modal>
     );
 };
+
 
 
 const AddPartnerModal = ({ isOpen, onClose, onSave }) => {
@@ -1668,6 +1802,120 @@ const AddOperatorModal = ({ isOpen, onClose, onSave, operator }) => {
         </Modal>
     );
 };
+
+const ProductionModal = ({ isOpen, onClose, onSave, production, users, partners, operators }) => {
+    const getInitialState = () => ({
+        clientName: '',
+        saleDate: '',
+        effectiveDate: '',
+        operator: '',
+        partner: '',
+        brokerId: '',
+        commissionValue: '',
+        awardValue: '',
+        status: 'Pendente',
+        preCadastroData: { clientType: 'PME' }
+    });
+
+    const [formData, setFormData] = useState(getInitialState());
+
+    useEffect(() => {
+        if (isOpen) {
+            setFormData(production ? { ...getInitialState(), ...production } : getInitialState());
+        }
+    }, [production, isOpen]);
+
+    const handleChange = (e) => {
+        const { name, value } = e.target;
+        if (name.includes('.')) {
+            const [parent, child] = name.split('.');
+            setFormData(p => ({ ...p, [parent]: { ...p[parent], [child]: value } }));
+        } else {
+            setFormData(p => ({ ...p, [name]: value }));
+        }
+    };
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        onSave(formData);
+    };
+    
+    // Filtra apenas parceiros que são do tipo "Corretora" como Sollus, etc.
+    const partnerBrokers = partners.filter(p => p.type === 'Corretora');
+
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title={production ? "Editar Produção" : "Lançar Nova Produção"} size="5xl">
+            <form onSubmit={handleSubmit} className="space-y-6">
+                <FormSection title="Dados da Venda" cols={4}>
+                    <div><Label>Nome do Cliente</Label><Input name="clientName" value={formData.clientName} onChange={handleChange} required /></div>
+                    <div><Label>Data da Assinatura</Label><DateField name="saleDate" value={formData.saleDate} onChange={handleChange} required /></div>
+                    <div><Label>Data da Vigência</Label><DateField name="effectiveDate" value={formData.effectiveDate} onChange={handleChange} /></div>
+                    <div><Label>Status</Label>
+                        <Select name="status" value={formData.status} onChange={handleChange}>
+                            <option>Pendente</option>
+                            <option>Convertido em Cliente</option>
+                            <option>Cancelado</option>
+                        </Select>
+                    </div>
+                </FormSection>
+
+                <FormSection title="Valores e Responsáveis" cols={4}>
+                    <div><Label>Operadora (Comissão)</Label>
+                        <Select name="operator" value={formData.operator} onChange={handleChange}>
+                             <option value="">Selecione...</option>
+                             {operators.map(op => <option key={op.id} value={op.name}>{op.name}</option>)}
+                        </Select>
+                    </div>
+                     <div><Label>Valor Comissão (R$)</Label><Input name="commissionValue" value={formData.commissionValue} onChange={handleChange} type="number" step="0.01" /></div>
+                    <div><Label>Parceiro (Prêmio)</Label>
+                        <Select name="partner" value={formData.partner} onChange={handleChange}>
+                             <option value="">Nenhum</option>
+                             {/* Mapeando os parceiros filtrados */}
+                             {partnerBrokers.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+                             <option value="Outras">Outras</option>
+                        </Select>
+                    </div>
+                    <div><Label>Valor Prêmio (R$)</Label><Input name="awardValue" value={formData.awardValue} onChange={handleChange} type="number" step="0.01" /></div>
+                     <div><Label>Corretor Responsável</Label>
+                        <Select name="brokerId" value={formData.brokerId} onChange={handleChange} required>
+                            <option value="">Selecione...</option>
+                            {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                        </Select>
+                    </div>
+                </FormSection>
+                
+                <FormSection title="Pré-Cadastro do Cliente (Para futura conversão)">
+                     <div><Label>Tipo de Plano</Label>
+                        <Select name="preCadastroData.clientType" value={formData.preCadastroData.clientType} onChange={handleChange}>
+                            <option value="PME">PME</option>
+                            <option value="Pessoa Física">Pessoa Física</option>
+                            <option value="Adesão">Adesão</option>
+                        </Select>
+                    </div>
+                    {formData.preCadastroData.clientType === 'PME' ? (
+                        <>
+                           <div><Label>Nome Empresa</Label><Input name="preCadastroData.companyName" value={formData.preCadastroData.companyName || ''} onChange={handleChange} /></div>
+                           <div><Label>CNPJ</Label><Input name="preCadastroData.cnpj" value={formData.preCadastroData.cnpj || ''} onChange={handleChange} mask={maskCNPJ} /></div>
+                        </>
+                    ) : (
+                         <>
+                           <div><Label>Nome Titular</Label><Input name="preCadastroData.holderName" value={formData.preCadastroData.holderName || ''} onChange={handleChange} /></div>
+                           <div><Label>CPF</Label><Input name="preCadastroData.holderCpf" value={formData.preCadastroData.holderCpf || ''} onChange={handleChange} mask={maskCPF} /></div>
+                        </>
+                    )}
+                    <div><Label>Email Principal</Label><Input name="preCadastroData.email" value={formData.preCadastroData.email || ''} onChange={handleChange} type="email" /></div>
+                    <div><Label>Telefone Principal</Label><Input name="preCadastroData.phone" value={formData.preCadastroData.phone || ''} onChange={handleChange} type="tel" /></div>
+                </FormSection>
+
+                <div className="flex justify-end gap-4 pt-4 border-t border-gray-200 dark:border-white/10">
+                    <Button type="button" variant="outline" onClick={onClose}>Cancelar</Button>
+                    <Button type="submit">Salvar Produção</Button>
+                </div>
+            </form>
+        </Modal>
+    );
+};
+
 const TaskModal = ({ isOpen, onClose, onSave, task }) => {
     const { users, clients, leads } = useData();
     const [formState, setFormState] = useState({});
@@ -1885,6 +2133,7 @@ const ContractModal = ({ isOpen, onClose, onSave, contract, clientType }) => {
     );
 };
 // --- PÁGINAS PRINCIPAIS ---
+
 const CommissionWizardModal = ({ isOpen, onClose, onSave }) => {
     const { clients, users } = useData();
     const [step, setStep] = useState(1);
@@ -2630,150 +2879,490 @@ function ClientDetails({ client, onBack, onEdit }) {
         </div>
     );
 };
-function CorporatePage({ onNavigate }) {
-    const { users, operators, addOperator, updateOperator, deleteOperator, companyProfile, updateCompanyProfile, partners, addPartner, deletePartner, clients, leads, tasks } = useData();
-    const { user, addUser, deleteUser } = useAuth();
-    const { toast } = useToast();
-    const confirm = useConfirm();
-    const [isUserModalOpen, setUserModalOpen] = useState(false);
-    const [isOperatorModalOpen, setOperatorModalOpen] = useState(false);
-    const [isPartnerModalOpen, setPartnerModalOpen] = useState(false);
-    const [editingOperator, setEditingOperator] = useState(null);
-    const [companyData, setCompanyData] = useState({});
-    const [expandedOperatorId, setExpandedOperatorId] = useState(null);
+// =================================================================================
+// INÍCIO DO BLOCO COMPLETO: GESTÃO CORPORATIVA 2.2 (Com lógica de permissão corrigida)
+// Copie e cole tudo abaixo, substituindo o código antigo correspondente.
+// =================================================================================
 
-    const sortedUsers = useMemo(() => [...users].sort((a,b) => (a.name || '').localeCompare(b.name || '')), [users]);
-    const sortedPartners = useMemo(() => [...partners].sort((a,b) => (a.name || '').localeCompare(b.name || '')), [partners]);
-    const sortedOperators = useMemo(() => [...operators].sort((a,b) => (a.name || '').localeCompare(b.name || '')), [operators]);
+// --- MODAIS DA GESTÃO CORPORATIVA ---
 
-    useEffect(() => { setCompanyData(companyProfile || {}); }, [companyProfile]);
-    
-    const handleCompanyDataChange = (e) => setCompanyData(prev => ({ ...prev, [e.target.name]: e.target.value }));
-    const handleSaveCompanyProfile = async () => { const success = await updateCompanyProfile(companyData); toast({ title: success ? "Sucesso" : "Erro", description: success ? "Dados da empresa atualizados." : "Não foi possível salvar os dados.", variant: success ? 'default' : 'destructive' }); };
-    
-    const handleDeleteOperator = async (operator) => { try { await confirm({ title: `Remover ${operator.name}?` }); const success = await deleteOperator(operator.id, operator.name); toast({ title: success ? "Removida" : "Erro", description: `${operator.name} foi ${success ? 'removida' : 'impossível de remover'}.`}); } catch (e) {} };
-    const handleDeleteUser = async (userToDelete) => { if (userToDelete.id === user.id) { toast({ title: "Ação Inválida", description: "Não pode excluir a própria conta.", variant: "destructive" }); return; } try { await confirm({ title: `Excluir ${userToDelete.name}?` }); const success = await deleteUser(userToDelete.id); toast({ title: success ? "Removido" : "Erro", description: `${userToDelete.name} foi ${success ? 'removido' : 'impossível de remover'}.` }); } catch (e) {} };
-    const handleDeletePartner = async (partner) => { try { await confirm({ title: `Remover ${partner.name}?` }); const success = await deletePartner(partner.id, partner.name); toast({ title: success ? "Removido" : "Erro", description: `${partner.name} foi ${success ? 'removido' : 'impossível de remover'}.` }); } catch (e) {} };
-    
-    const handleSaveOperator = async (operatorData) => {
-        const isEditing = !!operatorData.id;
-        const success = isEditing ? await updateOperator(operatorData.id, operatorData) : await addOperator(operatorData);
-        toast({ title: success ? "Sucesso!" : "Erro", description: `Operadora ${operatorData.name} foi ${isEditing ? 'atualizada' : 'adicionada'}.` });
-        if (success) {
-            setOperatorModalOpen(false);
-            setEditingOperator(null);
-        }
+const PermissionManagementModal = ({ isOpen, onClose, userToEdit, allUsers, onSave }) => {
+    if (!userToEdit) return null;
+
+    const [role, setRole] = useState(userToEdit.role || 'Corretor');
+    const [permissions, setPermissions] = useState({});
+
+    const ALL_MODULES = [
+        { key: 'viewClientes', label: 'Clientes' }, { key: 'viewLeads', label: 'Leads' },
+        { key: 'viewTarefas', label: 'Tarefas' }, { key: 'viewProducao', label: 'Produção' },
+        { key: 'viewComissoes', label: 'Comissões' }, { key: 'viewTimeline', label: 'Time-Line' },
+        { key: 'viewCorporativo', label: 'Gestão Corporativa' }
+    ];
+
+    useEffect(() => {
+        const initialPermissions = {};
+        ALL_MODULES.forEach(mod => {
+            const currentPerm = userToEdit.permissions?.[mod.key] || {};
+            initialPermissions[mod.key] = {
+                viewOwn: currentPerm.viewOwn !== undefined ? currentPerm.viewOwn : false,
+                viewTeam: currentPerm.viewTeam || false,
+                viewAll: currentPerm.viewAll || false,
+                allowedUsers: currentPerm.allowedUsers || []
+            };
+        });
+        setPermissions(initialPermissions);
+        setRole(userToEdit.role || 'Corretor');
+    }, [userToEdit]);
+
+    const handlePermissionChange = (moduleKey, field, value) => {
+        setPermissions(prev => ({
+            ...prev,
+            [moduleKey]: {
+                ...prev[moduleKey],
+                [field]: value
+            }
+        }));
     };
 
-    const handleOpenOperatorModal = (operator = null) => {
-        setEditingOperator(operator);
-        setOperatorModalOpen(true);
+    const handleAllowOthersToggle = (moduleKey, isEnabled) => {
+        setPermissions(prev => ({
+            ...prev,
+            [moduleKey]: {
+                ...prev[moduleKey],
+                viewTeam: isEnabled,
+                viewAll: isEnabled ? prev[moduleKey].viewAll : false,
+                allowedUsers: isEnabled ? prev[moduleKey].allowedUsers : []
+            }
+        }));
+    };
+    
+    const handleAllowedUserToggle = (moduleKey, userId) => {
+        const currentAllowed = permissions[moduleKey]?.allowedUsers || [];
+        const newAllowed = currentAllowed.includes(userId)
+            ? currentAllowed.filter(id => id !== userId)
+            : [...currentAllowed, userId];
+        handlePermissionChange(moduleKey, 'allowedUsers', newAllowed);
     };
 
-    const handleAddUser = async (newUserData) => { const result = await addUser(newUserData); toast({ title: result.success ? "Adicionado" : "Erro", description: result.success ? `${newUserData.name} foi adicionado.` : `Erro: ${result.code}`, variant: result.success ? 'default' : 'destructive' }); if (result.success) setUserModalOpen(false); };
-    const handleAddPartner = async (newPartnerData) => { const success = await addPartner(newPartnerData); toast({ title: success ? "Adicionado" : "Erro", description: `${newPartnerData.name} foi adicionado como parceiro.` }); if (success) setPartnerModalOpen(false); };
+    const handleSaveChanges = () => {
+        const finalPermissions = { ...permissions, managePermissions: role === 'AdminEmpresa' || role === 'CEO' || role === 'Gerente' };
+        onSave(userToEdit.id, { role, permissions: finalPermissions });
+        onClose();
+    };
+    
+    const usersForSelection = allUsers.filter(u => u.id !== userToEdit.id);
 
     return (
-    <div className="p-4 sm:p-6 lg:p-8">
-        <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-6">Gestão Corporativa</h2>
-        <GlassPanel className="p-6">
-            <Tabs defaultValue="team">
-                <TabsList>
-                    <TabsTrigger value="team">Equipe Interna (Usuários)</TabsTrigger>
-                    <TabsTrigger value="partners">Parceiros Externos</TabsTrigger>
-                    <TabsTrigger value="operators">Operadoras</TabsTrigger>
-                    <TabsTrigger value="company">Minha Empresa</TabsTrigger>
-                </TabsList>
-                
-                <TabsContent value="team">
-                    <div className="flex justify-between items-center mb-4"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80">Usuários do Sistema</h3><Button onClick={() => setUserModalOpen(true)}><PlusCircleIcon className="h-4 w-4 mr-2" />Adicionar Usuário</Button></div>
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                        {sortedUsers.map(u => {
-                            const clientCount = clients.filter(c => c.internal?.brokerId === u.id).length;
-                            const leadCount = leads.filter(l => l.ownerId === u.id).length;
-                            const taskCount = tasks.filter(t => t.assignedTo === u.id && t.status !== 'Concluída').length;
+        <Modal isOpen={isOpen} onClose={onClose} title={`Permissões de ${userToEdit.name}`} size="5xl">
+            <div className="space-y-6">
+                <div>
+                    <Label>Função Principal (Cargo)</Label>
+                    <Select value={role} onChange={e => setRole(e.target.value)}>
+                        <option value="Corretor">Corretor</option>
+                        <option value="Supervisor">Supervisor</option>
+                        <option value="AdminEmpresa">Admin da Empresa</option>
+                        <option value="Gerente">Gerente</option>
+                        <option value="CEO">Super Admin (CEO)</option>
+                    </Select>
+                </div>
+
+                <div className="border-t border-gray-200 dark:border-white/10 pt-4">
+                    <h3 className="text-md font-semibold text-cyan-600 dark:text-cyan-400/80">Acesso Detalhado por Módulo</h3>
+                    <div className="space-y-4 mt-4 max-h-[50vh] overflow-y-auto pr-2">
+                        {ALL_MODULES.map(mod => {
+                            const currentPermission = permissions[mod.key] || { viewOwn: false, viewTeam: false, viewAll: false, allowedUsers: [] };
+                            const canViewOthers = currentPermission.viewTeam || currentPermission.viewAll || currentPermission.allowedUsers.length > 0;
+
                             return (
-                                <GlassPanel key={u.id} className="p-4 flex items-start gap-4">
-                                    <Avatar className="h-12 w-12 text-xl mt-1"><AvatarFallback>{u?.name?.[0] || 'S'}</AvatarFallback></Avatar>
-                                    <div className="flex-grow">
-                                        <div className="flex justify-between items-start">
-                                            <div>
-                                                <p className="font-bold text-gray-900 dark:text-white">{u?.name}</p>
-                                                <p className="text-sm text-gray-600 dark:text-gray-400">{u?.email} - <span className="font-semibold">{u?.permissionLevel}</span></p>
-                                            </div>
-                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500/70 hover:text-red-400" onClick={() => handleDeleteUser(u)} disabled={u.id === user.id}><Trash2Icon className="h-4 w-4" /></Button>
+                                <GlassPanel key={mod.key} className="p-4 transition-all">
+                                    <Label className="text-lg mb-3 block">{mod.label}</Label>
+                                    <div className="space-y-4">
+                                        <div className="flex items-center justify-between">
+                                            <Label>Ver próprios itens?</Label>
+                                            <Switch checked={currentPermission.viewOwn} onChange={checked => handlePermissionChange(mod.key, 'viewOwn', checked)} />
                                         </div>
-                                        <div className="flex gap-4 mt-3 text-sm border-t border-gray-200 dark:border-white/10 pt-3">
-                                            <span title="Clientes na Carteira"><strong>{clientCount}</strong> Clientes</span>
-                                            <span title="Leads Ativos"><strong>{leadCount}</strong> Leads</span>
-                                            <span title="Tarefas Pendentes"><strong>{taskCount}</strong> Tarefas</span>
+
+                                        <div className="border-t border-gray-200 dark:border-white/10 pt-4">
+                                            <div className="flex items-center justify-between">
+                                                <Label>Permitir visualização de outros usuários?</Label>
+                                                <Switch checked={canViewOthers} onChange={checked => handleAllowOthersToggle(mod.key, checked)} />
+                                            </div>
+
+                                            {canViewOthers && (
+                                                <div className="pl-6 pt-4 space-y-4 animate-fade-in">
+                                                    <div className="flex items-center justify-between">
+                                                        <Label>Ver itens da equipe (Supervisão)?</Label>
+                                                        <Switch checked={currentPermission.viewTeam} onChange={checked => handlePermissionChange(mod.key, 'viewTeam', checked)} />
+                                                    </div>
+                                                    <div className="flex items-center justify-between">
+                                                        <Label>Ver TODOS os itens?</Label>
+                                                        <Switch checked={currentPermission.viewAll} onChange={checked => handlePermissionChange(mod.key, 'viewAll', checked)} />
+                                                    </div>
+                                                    
+                                                    <div>
+                                                        <Label>... OU permitir visualização de usuários específicos:</Label>
+                                                        <div className="mt-2 space-y-2 max-h-32 overflow-y-auto border border-gray-200 dark:border-white/10 rounded-lg p-2">
+                                                            {usersForSelection.map(u => (
+                                                                <label key={u.id} className="flex items-center gap-3 cursor-pointer p-1 rounded hover:bg-gray-200 dark:hover:bg-white/10">
+                                                                    <Checkbox
+                                                                        checked={(currentPermission.allowedUsers || []).includes(u.id)}
+                                                                        onChange={() => handleAllowedUserToggle(mod.key, u.id)}
+                                                                    />
+                                                                    <span className="text-sm">{u.name}</span>
+                                                                </label>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 </GlassPanel>
                             )
                         })}
                     </div>
-                </TabsContent>
-
-                <TabsContent value="partners">
-                    <div className="flex justify-between items-center mb-4"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80">Parceiros Comerciais (sem acesso)</h3><Button onClick={() => setPartnerModalOpen(true)}><PlusCircleIcon className="h-4 w-4 mr-2" />Adicionar Parceiro</Button></div>
-                    <div className="bg-gray-100 dark:bg-black/20 rounded-lg p-4 space-y-3">
-                        {sortedPartners.length === 0 && <p className="text-sm text-center text-gray-500 py-4">Nenhum parceiro externo cadastrado.</p>}
-                        {sortedPartners.map(p => (<div key={p.id} className="flex justify-between items-center bg-gray-200/70 dark:bg-gray-800/70 p-3 rounded-md"><div><p className="font-medium text-gray-900 dark:text-white">{p.name}</p><p className="text-sm text-gray-600 dark:text-gray-400">{p.email || 'Sem email'} - <span className="font-semibold">{p.type}</span></p></div><Button variant="ghost" size="icon" className="h-8 w-8 text-red-500/70 hover:text-red-400" onClick={() => handleDeletePartner(p)}><Trash2Icon className="h-4 w-4" /></Button></div>))}
-                    </div>
-                </TabsContent>
-                
-                <TabsContent value="operators">
-                    <div className="flex justify-between items-center mb-4"><h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80">Operadoras</h3><Button onClick={() => handleOpenOperatorModal()}><PlusCircleIcon className="h-4 w-4 mr-2" />Adicionar</Button></div>
-                    <div className="bg-gray-100 dark:bg-black/20 rounded-lg p-4 space-y-2">
-                        {sortedOperators.map(op => (
-                            <div key={op.id}>
-                                <div className="flex justify-between items-center bg-gray-200/70 dark:bg-gray-800/70 p-3 rounded-md">
-                                    <p className="font-medium text-gray-900 dark:text-white flex-grow cursor-pointer" onClick={() => setExpandedOperatorId(prev => prev === op.id ? null : op.id)}>{op.name}</p>
-                                    <div className="flex items-center gap-2">
-                                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleOpenOperatorModal(op)}><PencilIcon className="h-4 w-4" /></Button>
-                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500/70 hover:text-red-400" onClick={(e) => {e.stopPropagation(); handleDeleteOperator(op)}}><Trash2Icon className="h-4 w-4" /></Button>
-                                        <button onClick={() => setExpandedOperatorId(prev => prev === op.id ? null : op.id)} className="p-1">
-                                            <ChevronDownIcon className={cn("h-5 w-5 transition-transform", expandedOperatorId === op.id && "rotate-180")} />
-                                        </button>
-                                    </div>
-                                </div>
-                                {expandedOperatorId === op.id && (
-                                    <div className="p-4 bg-white dark:bg-gray-800 rounded-b-md">
-                                        <DetailItem label="Gerente de Contas" value={op.managerName} />
-                                        <DetailItem label="Telefone" value={op.managerPhone} />
-                                        <DetailItem label="Email" value={op.managerEmail} />
-                                        <DetailItem label="Portal do Corretor" value={op.portalLink} isLink />
-                                    </div>
-                                )}
-                            </div>
-                        ))}
-                    </div>
-                </TabsContent>
-                
-                <TabsContent value="company">
-                    <FormSection title="Dados da Empresa">
-                        <div><Label>Nome da Empresa</Label><Input name="companyName" value={companyData.companyName || ''} onChange={handleCompanyDataChange} /></div>
-                        <div><Label>CNPJ</Label><Input name="cnpj" value={companyData.cnpj || ''} onChange={handleCompanyDataChange} /></div>
-                        <div><Label>Endereço</Label><Input name="address" value={companyData.address || ''} onChange={handleCompanyDataChange} /></div>
-                        <div><Label>Logo da Empresa (URL)</Label><Input name="logoUrl" value={companyData.logoUrl || ''} onChange={handleCompanyDataChange} placeholder="https://site.com/logo.png"/></div>
-                    </FormSection>
-                    <FormSection title="Metas da Empresa (Opcional)">
-                        <div><Label>Meta de Faturamento Mensal</Label><Input type="number" name="goalRevenue" value={companyData.goalRevenue || ''} onChange={handleCompanyDataChange} /></div>
-                        <div><Label>Meta de Novos Clientes Mensal</Label><Input type="number" name="goalClients" value={companyData.goalClients || ''} onChange={handleCompanyDataChange} /></div>
-                    </FormSection>
-                    <div className="flex justify-end"><Button onClick={handleSaveCompanyProfile}>Salvar Alterações</Button></div>
-                </TabsContent>
-            </Tabs>
-        </GlassPanel>
-        
-        <AddCollaboratorModal isOpen={isUserModalOpen} onClose={() => setUserModalOpen(false)} onSave={handleAddUser} />
-        <AddOperatorModal isOpen={isOperatorModalOpen} onClose={() => { setOperatorModalOpen(false); setEditingOperator(null); }} onSave={handleSaveOperator} operator={editingOperator} />
-        <AddPartnerModal isOpen={isPartnerModalOpen} onClose={() => setPartnerModalOpen(false)} onSave={handleAddPartner} />
-    </div>
+                </div>
+                <div className="flex justify-end gap-4 pt-6"><Button type="button" variant="outline" onClick={onClose}>Cancelar</Button><Button type="button" variant="violet" onClick={handleSaveChanges}>Salvar Permissões</Button></div>
+            </div>
+        </Modal>
     );
 };
 
+const PlatformPartnerModal = ({ isOpen, onClose, onSave, partner }) => {
+    const getInitialState = () => ({ name: '', type: 'Plataforma de Entrega', document: '', email: '', phone: '', platformDetails: { responsibleManager: '', managerEmail: '', commissionAgreement: '', portalURL: '' } });
+    const [formData, setFormData] = useState(getInitialState());
+    useEffect(() => { setFormData(partner || getInitialState()); }, [partner, isOpen]);
+    const handleChange = (e) => {
+        const { name, value } = e.target;
+        if (name.startsWith('platformDetails.')) {
+            const key = name.split('.')[1];
+            setFormData(p => ({ ...p, platformDetails: { ...p.platformDetails, [key]: value } }));
+        } else { setFormData(p => ({ ...p, [name]: value })); }
+    };
+    const handleSubmit = (e) => { e.preventDefault(); onSave(formData); };
+    return (
+        <Modal isOpen={isOpen} onClose={onClose} title={partner ? "Editar Plataforma" : "Adicionar Plataforma"} size="3xl">
+            <form onSubmit={handleSubmit} className="space-y-6">
+                <FormSection title="Dados da Corretora Parceira" cols={2}>
+                    <div><Label>Nome da Plataforma</Label><Input name="name" value={formData.name} onChange={handleChange} required /></div>
+                    <div><Label>CNPJ</Label><Input name="document" value={formData.document} onChange={handleChange} mask={maskCNPJ} /></div>
+                    <div><Label>Email Principal</Label><Input type="email" name="email" value={formData.email} onChange={handleChange} /></div>
+                    <div><Label>Telefone Principal</Label><Input type="tel" name="phone" value={formData.phone} onChange={handleChange} /></div>
+                </FormSection>
+                <FormSection title="Detalhes da Parceria" cols={2}>
+                    <div><Label>Gerente Responsável</Label><Input name="platformDetails.responsibleManager" value={formData.platformDetails.responsibleManager} onChange={handleChange} /></div>
+                    <div><Label>Email do Gerente</Label><Input type="email" name="platformDetails.managerEmail" value={formData.platformDetails.managerEmail} onChange={handleChange} /></div>
+                    <div className="col-span-2"><Label>Acordo de Comissão</Label><Textarea name="platformDetails.commissionAgreement" value={formData.platformDetails.commissionAgreement} onChange={handleChange} rows={2} /></div>
+                    <div className="col-span-2"><Label>URL do Portal</Label><Input name="platformDetails.portalURL" value={formData.platformDetails.portalURL} onChange={handleChange} placeholder="https://" /></div>
+                </FormSection>
+                <div className="flex justify-end gap-4 pt-4"><Button variant="outline" type="button" onClick={onClose}>Cancelar</Button><Button type="submit">Salvar Plataforma</Button></div>
+            </form>
+        </Modal>
+    );
+};
+
+// --- SUBCOMPONENTES DAS ABAS ---
+const TeamMembersTab = memo(({ users, clients, leads, tasks, canManagePermissions, onDeleteUser, onOpenPermissionsModal }) => {
+    const sortedUsers = useMemo(() => [...users].sort((a, b) => (a.name || '').localeCompare(b.name || '')), [users]);
+    return (
+        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+            {sortedUsers.map(u => {
+                const clientCount = useMemo(() => clients.filter(c => c.internal?.brokerId === u.id).length, [clients, u.id]);
+                const leadCount = useMemo(() => leads.filter(l => l.ownerId === u.id).length, [leads, u.id]);
+                const taskCount = useMemo(() => tasks.filter(t => t.assignedTo === u.id && t.status !== 'Concluída').length, [tasks, u.id]);
+                return (
+                    <GlassPanel key={u.id} className="p-4 flex flex-col group transition-all duration-300 hover:scale-[1.02] hover:border-violet-500/50 dark:hover:border-violet-400/50">
+                        <div className="flex items-start gap-4">
+                            <Avatar className="h-12 w-12 text-xl mt-1 flex-shrink-0"><AvatarFallback>{u?.name?.[0] || 'S'}</AvatarFallback></Avatar>
+                            <div className="flex-grow min-w-0">
+                                <p className="font-bold text-lg text-gray-900 dark:text-white truncate" title={u?.name}>{u?.name}</p>
+                                <p className="text-sm font-semibold text-cyan-600 dark:text-cyan-400">{u?.role || u?.permissionLevel}</p>
+                            </div>
+                            <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+                                {canManagePermissions && u.role !== 'CEO' && (
+                                    <Button variant="ghost" size="icon" className="h-8 w-8" title="Gerenciar Permissões" onClick={() => onOpenPermissionsModal(u)}>
+                                        <AwardIcon className="h-4 w-4 text-cyan-500" />
+                                    </Button>
+                                )}
+                                <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500/70 hover:text-red-400" title="Excluir Usuário" onClick={() => onDeleteUser(u)}>
+                                    <Trash2Icon className="h-4 w-4" />
+                                </Button>
+                            </div>
+                        </div>
+                        <div className="flex justify-around mt-4 border-t border-gray-200 dark:border-white/10 pt-4 text-center">
+                            <div><p className="font-bold text-2xl text-gray-800 dark:text-white">{clientCount}</p><p className="text-xs text-gray-500 uppercase tracking-wider">Clientes</p></div>
+                            <div><p className="font-bold text-2xl text-gray-800 dark:text-white">{leadCount}</p><p className="text-xs text-gray-500 uppercase tracking-wider">Leads</p></div>
+                            <div><p className="font-bold text-2xl text-gray-800 dark:text-white">{taskCount}</p><p className="text-xs text-gray-500 uppercase tracking-wider">Tarefas</p></div>
+                        </div>
+                    </GlassPanel>
+                )
+            })}
+        </div>
+    );
+});
+
+const ExternalPartnersTab = memo(({ partners, onAdd, onEdit, onDelete }) => (
+    <div>
+        <div className="flex justify-between items-center mb-6">
+            <h3 className="text-xl font-semibold text-gray-900 dark:text-white">Parceiros Externos</h3>
+            <Button onClick={() => onAdd()} variant="violet"><PlusCircleIcon className="h-5 w-5 mr-2"/>Adicionar Parceiro</Button>
+        </div>
+        {partners.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {partners.map(p => (
+                    <GlassPanel key={p.id} className="p-4 group">
+                        <div className="flex justify-between items-start">
+                            <div>
+                                <p className="font-bold text-gray-900 dark:text-white">{p.name}</p>
+                                <p className="text-sm text-cyan-600 dark:text-cyan-400">{p.type}</p>
+                            </div>
+                            <div className="flex opacity-0 group-hover:opacity-100 transition-opacity">
+                                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onEdit(p)}><PencilIcon className="h-4 w-4"/></Button>
+                                <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500/70" onClick={() => onDelete(p)}><Trash2Icon className="h-4 w-4"/></Button>
+                            </div>
+                        </div>
+                    </GlassPanel>
+                ))}
+            </div>
+        ) : <EmptyState title="Nenhum Parceiro Externo" message="Adicione contatos comerciais como outras corretoras ou freelancers." onAction={() => onAdd()} actionText="Adicionar Parceiro" />}
+    </div>
+));
+
+const PlatformsTab = memo(({ platforms, onAdd, onEdit, onDelete }) => (
+    <div>
+        <div className="flex justify-between items-center mb-6">
+            <h3 className="text-xl font-semibold text-gray-900 dark:text-white">Plataformas de Entrega</h3>
+            <Button onClick={() => onAdd()} variant="violet"><PlusCircleIcon className="h-5 w-5 mr-2"/>Adicionar Plataforma</Button>
+        </div>
+        {platforms.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {platforms.map(p => (
+                    <GlassPanel key={p.id} className="p-4 group">
+                         <div className="flex justify-between items-start">
+                            <div>
+                                <p className="font-bold text-gray-900 dark:text-white">{p.name}</p>
+                                <p className="text-sm text-cyan-600 dark:text-cyan-400">{p.platformDetails?.portalURL || 'Sem portal'}</p>
+                            </div>
+                            <div className="flex opacity-0 group-hover:opacity-100 transition-opacity">
+                                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onEdit(p)}><PencilIcon className="h-4 w-4"/></Button>
+                                <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500/70" onClick={() => onDelete(p)}><Trash2Icon className="h-4 w-4"/></Button>
+                            </div>
+                        </div>
+                    </GlassPanel>
+                ))}
+            </div>
+        ) : <EmptyState title="Nenhuma Plataforma Cadastrada" message="Adicione as corretoras parceiras que intermediam seus contratos." onAction={() => onAdd()} actionText="Adicionar Plataforma" />}
+    </div>
+));
+
+const OperatorsTab = memo(({ operators, onAdd, onEdit, onDelete }) => (
+    <div>
+        <div className="flex justify-between items-center mb-6">
+            <h3 className="text-xl font-semibold text-gray-900 dark:text-white">Operadoras de Saúde</h3>
+            <Button onClick={() => onAdd()} variant="violet"><PlusCircleIcon className="h-5 w-5 mr-2"/>Adicionar Operadora</Button>
+        </div>
+        {operators.length > 0 ? (
+            <div className="space-y-3">
+                {operators.map(op => (
+                    <GlassPanel key={op.id} className="p-3 flex justify-between items-center group">
+                        <p className="font-semibold">{op.name}</p>
+                        <div className="flex opacity-0 group-hover:opacity-100 transition-opacity">
+                            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onEdit(op)}><PencilIcon className="h-4 w-4"/></Button>
+                            <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500/70" onClick={() => onDelete(op)}><Trash2Icon className="h-4 w-4"/></Button>
+                        </div>
+                    </GlassPanel>
+                ))}
+            </div>
+        ) : <EmptyState title="Nenhuma Operadora Cadastrada" message="Cadastre as operadoras com as quais você trabalha." onAction={() => onAdd()} actionText="Adicionar Operadora" />}
+    </div>
+));
+
+// --- PÁGINA PRINCIPAL E SEUS SUBCOMPONENTES ---
+function GestaoCorporativaPage() {
+    const { users, partners, operators, clients, leads, tasks, addPartner, deletePartner, addOperator, deleteOperator, updateOperator } = useData();
+    const { addUser, deleteUser, updateUserProfile } = useAuth();
+    const { toast } = useToast();
+    const confirm = useConfirm();
+    const { can } = usePermissions();
+
+    const [activeSubPage, setActiveSubPage] = useState('team');
+    
+    const [isUserModalOpen, setUserModalOpen] = useState(false);
+    const [isPartnerModalOpen, setPartnerModalOpen] = useState(false);
+    const [isPlatformModalOpen, setPlatformModalOpen] = useState(false);
+    const [isOperatorModalOpen, setOperatorModalOpen] = useState(false);
+    const [isPermissionsModalOpen, setPermissionsModalOpen] = useState(false);
+
+    const [editingUser, setEditingUser] = useState(null);
+    const [editingPartner, setEditingPartner] = useState(null);
+    const [editingPlatform, setEditingPlatform] = useState(null);
+    const [editingOperator, setEditingOperator] = useState(null);
+    
+    const handleSaveUser = async (formData) => {
+        const { role, ...restOfData } = formData;
+        
+        const permissionsByRole = {
+            'Corretor': {
+                viewClientes: { viewOwn: true }, viewLeads: { viewOwn: true }, viewTarefas: { viewOwn: true },
+                viewProducao: { viewOwn: true }, viewComissoes: { viewOwn: true }
+            },
+            'Supervisor': {
+                viewClientes: { viewTeam: true }, viewLeads: { viewTeam: true }, viewTarefas: { viewTeam: true },
+                viewProducao: { viewTeam: true }, viewComissoes: { viewTeam: true }
+            },
+            'AdminEmpresa': {
+                viewClientes: { viewAll: true }, viewLeads: { viewAll: true }, viewTarefas: { viewAll: true },
+                viewProducao: { viewAll: true }, viewComissoes: { viewAll: true }, viewTimeline: { viewAll: true },
+                viewCorporativo: { viewAll: true }, managePermissions: true
+            },
+            'Gerente': {
+                viewClientes: { viewAll: true }, viewLeads: { viewAll: true }, viewTarefas: { viewAll: true },
+                viewProducao: { viewAll: true }, viewComissoes: { viewAll: true }, viewTimeline: { viewAll: true },
+                viewCorporativo: { viewAll: true }, managePermissions: true
+            },
+            'CEO': {
+                viewClientes: { viewAll: true }, viewLeads: { viewAll: true }, viewTarefas: { viewAll: true },
+                viewProducao: { viewAll: true }, viewComissoes: { viewAll: true }, viewTimeline: { viewAll: true },
+                viewCorporativo: { viewAll: true }, managePermissions: true
+            }
+        };
+        const userData = { ...restOfData, role: role, permissions: permissionsByRole[role] || {} };
+        
+        const result = await addUser(userData);
+        if (result.success) {
+            toast({ title: "Sucesso!", description: `Usuário ${userData.name} criado.` });
+            setUserModalOpen(false);
+        } else {
+            toast({ title: "Erro", description: `Não foi possível criar o usuário. (${result.code})`, variant: 'destructive' });
+        }
+    };
+    const handleDeleteUser = async (userToDelete) => {
+      try {
+            await confirm({ title: `Excluir ${userToDelete.name}?`, description: "Esta ação é irreversível." });
+            await deleteUser(userToDelete.id); 
+            toast({ title: "Usuário Excluído", description: `${userToDelete.name} foi removido do Firestore.` });
+        } catch(e) { /* Ação cancelada */ }
+    };
+    const handleOpenPermissionsModal = (userToEdit) => {
+        setEditingUser(userToEdit);
+        setPermissionsModalOpen(true);
+    };
+    const handleSavePermissions = async (userId, data) => {
+        const success = await updateUserProfile(userId, data);
+        toast({ title: success ? "Sucesso!" : "Erro", description: success ? "Permissões atualizadas." : "Falha ao salvar.", variant: success ? 'default' : 'destructive' });
+    };
+
+    const handleOpenPartnerModal = (partner = null) => {
+        setEditingPartner(partner);
+        setPartnerModalOpen(true);
+    };
+    const handleOpenPlatformModal = (platform = null) => {
+        setEditingPlatform(platform);
+        setPlatformModalOpen(true);
+    };
+    const handleSavePartnerOrPlatform = async (data) => {
+        const isEditing = !!data.id;
+        // A função de update para parceiros precisa ser criada no DataContext
+        const success = isEditing ? await updateDoc(doc(db, "partners", data.id), data) : await addPartner(data); 
+        if (success) {
+            toast({ title: "Sucesso!", description: `${data.type || 'Item'} salvo.` });
+            setPartnerModalOpen(false);
+            setPlatformModalOpen(false);
+        } else {
+            toast({ title: "Erro", description: "Não foi possível salvar.", variant: "destructive" });
+        }
+    };
+    const handleDeletePartnerOrPlatform = async (item) => {
+        try {
+            await confirm({ title: `Excluir ${item.name}?`});
+            await deletePartner(item.id, item.name);
+            toast({ title: "Excluído", description: `${item.name} foi removido.` });
+        } catch(e){}
+    };
+    
+    const handleOpenOperatorModal = (op = null) => {
+        setEditingOperator(op);
+        setOperatorModalOpen(true);
+    };
+    const handleSaveOperator = async (opData) => {
+        const isEditing = !!opData.id;
+        const success = isEditing ? await updateOperator(opData.id, opData) : await addOperator(opData);
+        if (success) {
+            toast({ title: "Sucesso!", description: "Operadora salva." });
+            setOperatorModalOpen(false);
+        } else {
+            toast({ title: "Erro", description: "Não foi possível salvar.", variant: "destructive" });
+        }
+    };
+    const handleDeleteOperator = async (op) => {
+        try {
+            await confirm({ title: `Excluir Operadora ${op.name}?`});
+            await deleteOperator(op.id, op.name);
+            toast({ title: "Excluída", description: `${op.name} foi removida.` });
+        } catch(e){}
+    };
+    
+    const subNavItems = [
+        { id: 'team', label: 'Colaboradores', icon: UsersIcon },
+        { id: 'partners', label: 'Parceiros Externos', icon: BriefcaseIcon },
+        { id: 'platforms', label: 'Plataformas', icon: Share2Icon },
+        { id: 'operators', label: 'Operadoras', icon: BuildingIcon },
+    ];
+
+    const externalPartners = useMemo(() => partners.filter(p => p.type !== 'Plataforma de Entrega'), [partners]);
+    const deliveryPlatforms = useMemo(() => partners.filter(p => p.type === 'Plataforma de Entrega'), [partners]);
+
+    const renderSubPage = () => {
+        switch (activeSubPage) {
+            case 'team':
+                return (
+                    <div>
+                        <div className="flex justify-between items-center mb-6">
+                            <h3 className="text-xl font-semibold text-gray-900 dark:text-white">Colaboradores Internos</h3>
+                            <Button onClick={() => setUserModalOpen(true)} variant="violet">
+                                <PlusCircleIcon className="h-5 w-5 mr-2"/> Adicionar Colaborador
+                            </Button>
+                        </div>
+                        <TeamMembersTab users={users} clients={clients} leads={leads} tasks={tasks} canManagePermissions={can('managePermissions')} onDeleteUser={handleDeleteUser} onOpenPermissionsModal={handleOpenPermissionsModal} />
+                    </div>
+                );
+            case 'partners':
+                return <ExternalPartnersTab partners={externalPartners} onAdd={handleOpenPartnerModal} onEdit={handleOpenPartnerModal} onDelete={handleDeletePartnerOrPlatform} />;
+            case 'platforms':
+                return <PlatformsTab platforms={deliveryPlatforms} onAdd={handleOpenPlatformModal} onEdit={handleOpenPlatformModal} onDelete={handleDeletePartnerOrPlatform} />;
+            case 'operators':
+                return <OperatorsTab operators={operators} onAdd={handleOpenOperatorModal} onEdit={handleOpenOperatorModal} onDelete={handleDeleteOperator} />;
+            default:
+                return null;
+        }
+    }
+
+    return (
+        <div className="p-4 sm:p-6 lg:p-8 flex flex-col md:flex-row gap-8 min-h-[calc(100vh-5rem)]">
+            <aside className="w-full md:w-64 flex-shrink-0">
+                <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-6">Gestão Corporativa</h2>
+                <nav className="flex flex-row md:flex-col gap-2">
+                    {subNavItems.map(item => (
+                        <button key={item.id} onClick={() => setActiveSubPage(item.id)}
+                            className={cn("w-full flex items-center p-3 rounded-lg transition-all duration-300 font-semibold text-sm", activeSubPage === item.id ? "bg-violet-100 dark:bg-violet-500/20 text-violet-600 dark:text-violet-300" : "text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5")} >
+                            <item.icon className="h-5 w-5 mr-3" />
+                            <span>{item.label}</span>
+                        </button>
+                    ))}
+                </nav>
+            </aside>
+            <main className="flex-grow">
+                {renderSubPage()}
+            </main>
+            
+            <AddCollaboratorModal isOpen={isUserModalOpen} onClose={() => setUserModalOpen(false)} onSave={handleSaveUser} />
+            {editingUser && <PermissionManagementModal isOpen={isPermissionsModalOpen} onClose={() => setPermissionsModalOpen(false)} userToEdit={editingUser} allUsers={users} onSave={handleSavePermissions} />}
+            <AddPartnerModal isOpen={isPartnerModalOpen} onClose={() => setPartnerModalOpen(false)} onSave={handleSavePartnerOrPlatform} partner={editingPartner}/>
+            <PlatformPartnerModal isOpen={isPlatformModalOpen} onClose={() => setPlatformModalOpen(false)} onSave={handleSavePartnerOrPlatform} partner={editingPlatform}/>
+            <AddOperatorModal isOpen={isOperatorModalOpen} onClose={() => setOperatorModalOpen(false)} onSave={handleSaveOperator} operator={editingOperator}/>
+        </div>
+    );
+}
 const MiniCalendarPopover = ({ isOpen, onClose, onSelectDate, targetElement }) => {
     const [currentDate, setCurrentDate] = useState(new Date());
     const popoverRef = useRef(null);
@@ -3749,43 +4338,491 @@ function TasksPage() {
 }
 function TimelinePage() { const { timeline, users, loading } = useData(); const [filters, setFilters] = useState({ userId: 'all', module: 'all', actionType: 'all', searchTerm: '' }); const handleFilterChange = (e) => setFilters(prev => ({ ...prev, [e.target.name]: e.target.value })); const filteredTimeline = useMemo(() => { return timeline.filter(log => { if (!log) return false; const userMatch = filters.userId === 'all' || log.userId === filters.userId; const moduleMatch = filters.module === 'all' || log.module === filters.module; const actionMatch = filters.actionType === 'all' || log.actionType === filters.actionType; const searchMatch = !filters.searchTerm || (log.description || '').toLowerCase().includes(filters.searchTerm.toLowerCase()) || (log.userName || '').toLowerCase().includes(filters.searchTerm.toLowerCase()) || (log.entity?.name || '').toLowerCase().includes(filters.searchTerm.toLowerCase()); return userMatch && moduleMatch && actionMatch && searchMatch; }); }, [timeline, filters]); const TimelineItem = ({ log }) => { const getIcon = (actionType) => { switch (actionType) { case 'CRIAÇÃO': return <PlusCircleIcon className="h-5 w-5 text-green-500" />; case 'EDIÇÃO': return <PencilIcon className="h-5 w-5 text-yellow-500" />; case 'EXCLUSÃO': return <Trash2Icon className="h-5 w-5 text-red-500" />; case 'CONVERSÃO': return <RefreshCwIcon className="h-5 w-5 text-blue-500" />; default: return <InfoIcon className="h-5 w-5 text-gray-500" />; } }; return ( <div className="flex items-start gap-4 p-4 border-b border-gray-200 dark:border-white/10 last:border-b-0"> <div className="flex-shrink-0 pt-1">{getIcon(log.actionType)}</div> <div className="flex-grow"> <p className="text-sm"> <span className="font-semibold text-gray-900 dark:text-white">{log.userName || 'Sistema'}</span> <span className="text-gray-600 dark:text-gray-400"> {log.description || ''}</span> </p> <div className="text-xs text-gray-500 dark:text-gray-500 mt-1"> {formatDateTime(log.timestamp)} </div> <div className="flex flex-wrap gap-2 mt-2"> {log.module && <Badge variant="outline">{log.module}</Badge>} {log.actionType && <Badge>{log.actionType}</Badge>} {log.entity?.name && <Badge variant="secondary">{log.entity.type}: {log.entity.name}</Badge>} </div> </div> <Avatar className="h-10 w-10 border-2 border-gray-300 dark:border-gray-600"> <AvatarImage src={log.userAvatar} /> <AvatarFallback>{log.userName?.[0] || 'S'}</AvatarFallback> </Avatar> </div> ); }; return ( <div className="p-4 sm:p-6 lg:p-8"> <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-6">Time-Line de Atividades</h2> <GlassPanel className="p-4 mb-6"> <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4"> <Input placeholder="Buscar..." name="searchTerm" value={filters.searchTerm} onChange={handleFilterChange} /> <Select name="userId" value={filters.userId} onChange={handleFilterChange}> <option value="all">Todos Usuários</option> {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)} </Select> <Select name="module" value={filters.module} onChange={handleFilterChange}> <option value="all">Todos Módulos</option> <option>Clientes</option><option>Leads</option><option>Tarefas</option><option>Corporativo</option> </Select> <Select name="actionType" value={filters.actionType} onChange={handleFilterChange}> <option value="all">Todas Ações</option> <option>CRIAÇÃO</option><option>EDIÇÃO</option><option>EXCLUSÃO</option><option>CONVERSÃO</option> </Select> </div> </GlassPanel> <GlassPanel> <div className="max-h-[70vh] overflow-y-auto"> {loading && timeline.length === 0 ? ( <p className="text-center text-gray-500 p-8">Carregando...</p> ) : filteredTimeline.length > 0 ? ( filteredTimeline.map(log => <TimelineItem key={log.id} log={log} />) ) : ( <EmptyState title="Nenhuma Atividade Encontrada" message="Ajuste os filtros." /> )} </div> </GlassPanel> </div> ); };
 
-const MetricCard = ({ title, value, icon }) => ( <GlassPanel className="p-6 flex flex-col justify-between"> <div className="flex justify-between items-start"> <h3 className="text-base font-semibold text-gray-800 dark:text-white">{title}</h3> <div className="text-gray-400 dark:text-gray-500">{icon}</div> </div> <p className="text-4xl font-bold text-gray-900 dark:text-white mt-4">{value}</p> </GlassPanel> );
-const SalesFunnelChart = ({ data }) => ( <div className="space-y-2"> {data.map((stage, index) => ( <div key={stage.name} className="flex items-center"> <div className="w-32 text-sm text-right pr-4 text-gray-600 dark:text-gray-400">{stage.name}</div> <div className="flex-1 bg-gray-200 dark:bg-gray-800 rounded-full h-8"> <div style={{ width: `${stage.percentage}%`, backgroundColor: stage.color }} className="h-8 rounded-full flex items-center justify-end px-3 text-white font-bold"> {stage.value} </div> </div> </div> ))} </div> );
-const TeamPerformanceRanking = ({ data, title }) => ( <GlassPanel className="p-6"> <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">{title}</h3> <div className="space-y-3"> {data.map((item, index) => ( <div key={item.name} className="flex items-center gap-4"> <span className="font-bold text-lg w-6">{index + 1}</span> <div className="flex-1"><p className="font-semibold">{item.name}</p><p className="text-sm text-gray-500">{formatCurrency(item.value)}</p></div> </div> ))} </div> </GlassPanel> );
-const ActivityHeatmap = () => ( <GlassPanel className="p-6"> <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Mapa de Calor de Atividades</h3> <p className="text-gray-500 text-sm">Visualização de atividades por dia da semana (feature em desenvolvimento).</p> </GlassPanel> );
-const SimplePieChart = ({ data, title }) => { const total = data.reduce((sum, item) => sum + item.value, 0); return ( <GlassPanel className="p-6"> <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">{title}</h3> <div className="space-y-2"> {data.map((item, index) => ( <div key={item.name} className="flex items-center justify-between text-sm"> <span>{item.name}</span> <span className="font-semibold">{total > 0 ? ((item.value / total) * 100).toFixed(1) : 0}% ({item.value})</span> </div> ))} </div> </GlassPanel> );};
-const RiskValueMatrix = ({ data }) => { const quadrants = { q1: [], q2: [], q3: [], q4: [] }; const now = new Date(); data.forEach(client => { const activeContract = client.contracts?.find(c => c.status === 'ativo'); if (!activeContract) return; const value = parseFloat(activeContract.contractValue || 0); const endDate = activeContract.dataFimContrato ? new Date(activeContract.dataFimContrato) : null; const daysLeft = endDate ? Math.ceil((endDate - now) / (1000 * 60 * 60 * 24)) : Infinity; const highValue = value > 1000; const highRisk = daysLeft <= 90; if (highValue && highRisk) quadrants.q1.push(client); else if (highValue && !highRisk) quadrants.q2.push(client); else if (!highValue && highRisk) quadrants.q3.push(client); else quadrants.q4.push(client); }); return ( <GlassPanel className="p-6"> <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Matriz Risco vs. Valor</h3> <div className="grid grid-cols-2 grid-rows-2 gap-2 h-96"> <div className="bg-red-500/10 p-2 rounded-lg"><h4 className="font-bold text-red-700 dark:text-red-300">Alto Valor / Alto Risco ({quadrants.q1.length})</h4></div> <div className="bg-green-500/10 p-2 rounded-lg"><h4 className="font-bold text-green-700 dark:text-green-300">Alto Valor / Baixo Risco ({quadrants.q2.length})</h4></div> <div className="bg-yellow-500/10 p-2 rounded-lg"><h4 className="font-bold text-yellow-700 dark:text-yellow-300">Baixo Valor / Alto Risco ({quadrants.q3.length})</h4></div> <div className="bg-blue-500/10 p-2 rounded-lg"><h4 className="font-bold text-blue-700 dark:text-blue-300">Baixo Valor / Baixo Risco ({quadrants.q4.length})</h4></div> </div> </GlassPanel> ); };
+// ===================================================================================
+//
+// 			       INÍCIO DA SEÇÃO: PAINEL DE CONTROLE 2.0
+//
+// 				    Todo o código novo e refatorado está contido aqui.
+//
+// ===================================================================================
 
-function PainelDeControleTab({ onNavigate }) { const { clients, leads } = useData(); const metrics = useMemo(() => { const totalLeads = leads.length; const leadsGanhos = leads.filter(l => l.status === 'Ganhos').length; const leadsPerdidos = leads.filter(l => l.status === 'Perdidos').length; const activeLeads = totalLeads - leadsGanhos - leadsPerdidos; const conversionRate = (leadsGanhos + leadsPerdidos) > 0 ? (leadsGanhos / (leadsGanhos + leadsPerdidos)) * 100 : 0; const now = new Date(); const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1); const newClients = clients.filter(c => c.createdAt && typeof c.createdAt.toDate === 'function' && c.createdAt.toDate() >= startOfMonth).length; const faturamento = clients.reduce((sum, client) => { const activeContract = client.contracts?.find(c => c.status === 'ativo'); return sum + (activeContract ? parseFloat(activeContract.contractValue) || 0 : 0); }, 0); return { faturamento, newClients, activeLeads, conversionRate: conversionRate.toFixed(1) + '%', funnel: [ { name: 'Novo', value: leads.filter(l => l.status === 'Novo').length, color: '#3B82F6' }, { name: 'Em Contato', value: leads.filter(l => l.status === 'Em contato').length, color: '#0EA5E9' }, { name: 'Proposta', value: leads.filter(l => l.status === 'Proposta enviada').length, color: '#F59E0B' }, { name: 'Ganho', value: leadsGanhos, color: '#10B981' }, ] }; }, [clients, leads]); const funnelWithPercentages = useMemo(() => { const total = metrics.funnel.reduce((sum, stage) => sum + stage.value, 0); return metrics.funnel.map(stage => ({ ...stage, percentage: total > 0 ? (stage.value / total) * 100 : 0 })); }, [metrics.funnel]); const AlertsPanel = ({ onNavigate }) => { const { clients } = useData(); const alerts = useMemo(() => { const allAlerts = []; const today = new Date(); const thirtyDaysFromNow = new Date(); thirtyDaysFromNow.setDate(today.getDate() + 30); clients.forEach(client => { (client.contracts || []).forEach(contract => { if (contract.status === 'ativo' && contract.dataFimContrato) { const endDate = new Date(contract.dataFimContrato); if (endDate > today && endDate <= thirtyDaysFromNow) { const daysLeft = Math.ceil((endDate - today) / (1000 * 60 * 60 * 24)); allAlerts.push({ id: `exp-${client.id}`, type: 'expiring', text: `Contrato de ${client.general.holderName} vence em ${daysLeft} dias`, action: () => onNavigate('client-details', client.id) }); } } }); (client.beneficiaries || []).forEach(ben => { if (!ben.dob || !ben.weight || !ben.height) { allAlerts.push({ id: `ben-${client.id}-${ben.id}`, type: 'incomplete', text: `Dados incompletos para ${ben.name} (cliente ${client.general.holderName})`, action: () => onNavigate('edit-client', client.id, { initialTab: 'beneficiaries' }) }); } }); }); return allAlerts.slice(0, 5); }, [clients, onNavigate]); return ( <div className="space-y-3"> {alerts.map(alert => ( <div key={alert.id} className="p-3 bg-yellow-100/50 dark:bg-yellow-900/30 rounded-lg flex items-center justify-between"> <div className="flex items-center gap-3"> <AlertTriangleIcon className="h-5 w-5 text-yellow-600 dark:text-yellow-400 flex-shrink-0" /> <p className="text-sm text-yellow-800 dark:text-yellow-200">{alert.text}</p> </div> <Button size="sm" variant="ghost" onClick={alert.action}>Ver</Button> </div> ))} {alerts.length === 0 && <p className="text-sm text-gray-500 text-center py-4">Nenhum aviso no momento.</p>} </div> );}; const CortexInsights = () => { return ( <div className="space-y-3"> <div className="p-3 bg-violet-100/50 dark:bg-violet-900/30 rounded-lg flex items-center gap-3"> <SparklesIcon className="h-5 w-5 text-violet-600 dark:text-violet-400 flex-shrink-0" /> <p className="text-sm text-violet-800 dark:text-violet-200">20 clientes PME têm plano de saúde mas não odontológico. Sugerir upsell.</p> </div> </div> ); }; return ( <div className="space-y-8"> <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6"> <MetricCard title="Faturamento (Ativos)" value={formatCurrency(metrics.faturamento)} icon={<DollarSignIcon />} /> <MetricCard title="Novos Clientes (Mês)" value={metrics.newClients} icon={<UsersIcon />} /> <MetricCard title="Leads Ativos" value={metrics.activeLeads} icon={<TargetIcon />} /> <MetricCard title="Taxa de Conversão" value={metrics.conversionRate} icon={<TrendingUpIcon />} /> </div> <div className="grid grid-cols-1 lg:grid-cols-2 gap-8"> <GlassPanel className="p-6"> <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Funil de Vendas</h3> <SalesFunnelChart data={funnelWithPercentages} /> </GlassPanel> <div className="space-y-6"> <GlassPanel className="p-6"> <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Avisos Importantes</h3> <AlertsPanel onNavigate={onNavigate} /> </GlassPanel> <GlassPanel className="p-6" cortex> <h3 className="text-lg font-semibold text-violet-700 dark:text-violet-300 mb-4 flex items-center gap-2"><SparklesIcon /> Insights da IA (Córtex)</h3> <CortexInsights /> </GlassPanel> </div> </div> </div> );}
-function SaudeFinanceiraTab() { const { clients } = useData(); const metrics = useMemo(() => { const activeClients = clients.filter(c => c.general.status === 'Ativo'); const mrr = activeClients.reduce((sum, client) => { const activeContract = client.contracts?.find(c => c.status === 'ativo'); return sum + (activeContract ? parseFloat(activeContract.contractValue) || 0 : 0); }, 0); const churnedClients = clients.filter(c => c.general.status === 'Inativo').length; const churnRate = clients.length > 0 ? (churnedClients / clients.length) * 100 : 0; const totalRevenue = clients.reduce((sum, c) => sum + (c.contracts || []).reduce((s, contract) => s + parseFloat(contract.contractValue || 0), 0), 0); const totalCommission = clients.reduce((sum, c) => sum + parseFloat(c.commission?.contractValue || 0) * parseFloat(c.commission?.commissionRate || 0), 0); return { mrr, churnRate: churnRate.toFixed(1) + '%', totalRevenue, totalCommission }; }, [clients]); return ( <div className="space-y-8"> <div className="grid grid-cols-1 md:grid-cols-3 gap-6"> <MetricCard title="MRR (Receita Recorrente Mensal)" value={formatCurrency(metrics.mrr)} icon={<RefreshCwIcon />} /> <MetricCard title="Churn Rate" value={metrics.churnRate} icon={<TrendingUpIcon className="transform -scale-y-100" />} /> <MetricCard title="Faturamento Total" value={formatCurrency(metrics.totalRevenue)} icon={<DollarSignIcon />} /> </div> <GlassPanel className="p-6"> <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Receita vs. Comissão</h3> <div className="h-64 flex items-center justify-center text-gray-500">Gráfico em desenvolvimento.</div> </GlassPanel> </div> );}
-function PerformanceEquipeTab() { const { user } = useAuth(); const { users, clients, tasks } = useData(); const performanceData = useMemo(() => { const brokers = users.filter(u => u.permissionLevel === 'Corretor'); return brokers.map(broker => { const salesVolume = clients.filter(c => c.internal?.brokerId === broker.id).reduce((sum, c) => sum + (c.contracts || []).reduce((s, contract) => s + parseFloat(contract.contractValue || 0), 0), 0); const activities = tasks.filter(t => t.assignedTo === broker.id).length; return { name: broker.name, salesVolume, activities }; }).sort((a, b) => b.salesVolume - a.salesVolume); }, [users, clients, tasks]); const visibleData = user.permissionLevel === 'Supervisor' ? performanceData.filter(d => users.find(u => u.name === d.name)?.supervisorId === user.uid) : performanceData; return ( <div className="space-y-8"> <div className="grid grid-cols-1 lg:grid-cols-2 gap-8"> <TeamPerformanceRanking data={visibleData.map(d => ({name: d.name, value: d.salesVolume}))} title="Ranking por Volume de Vendas" /> <TeamPerformanceRanking data={visibleData.map(d => ({name: d.name, value: d.activities}))} title="Ranking por Atividades Registradas" /> </div> <ActivityHeatmap /> </div> );}
-function AnaliseCarteiraTab() { const { clients, operators } = useData(); const operatorData = useMemo(() => { const counts = {}; clients.forEach(client => { const activeContract = client.contracts?.find(c => c.status === 'ativo'); if (activeContract && activeContract.planOperator) { counts[activeContract.planOperator] = (counts[activeContract.planOperator] || 0) + 1; } }); return Object.entries(counts).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value); }, [clients]); return ( <div className="grid grid-cols-1 lg:grid-cols-2 gap-8"> <SimplePieChart data={operatorData} title="Clientes por Operadora" /> <RiskValueMatrix data={clients} /> </div> );}
+// --- COMPONENTE 1: NOVO CARD DE MÉTRICA INTELIGENTE ---
+const Dashboard2_MetricCard = memo(({ title, value, icon, tooltip, trend, trendType = 'neutral' }) => {
+    const trendColors = {
+        positive: 'text-green-500 dark:text-green-400',
+        negative: 'text-red-500 dark:text-red-400',
+        neutral: 'text-gray-500 dark:text-gray-400',
+    };
+    const TrendIcon = trendType === 'positive' ? ArrowUpRightIcon : ArrowDownRightIcon;
+    return (
+        <GlassPanel className="p-5 flex flex-col justify-between group relative transition-all duration-300 hover:border-cyan-500/50 dark:hover:border-cyan-400/50">
+            <div className="flex justify-between items-start">
+                <h3 className="text-base font-semibold text-gray-800 dark:text-white">{title}</h3>
+                <div className="text-gray-400 dark:text-gray-500">{icon}</div>
+            </div>
+            <div>
+                <p className="text-4xl font-bold text-gray-900 dark:text-white mt-2">{value}</p>
+                {trend && (
+                    <div className="flex items-center gap-1 mt-1">
+                         <TrendIcon className={cn("h-4 w-4", trendColors[trendType])} />
+                        <span className={cn("text-sm font-semibold", trendColors[trendType])}>{trend}</span>
+                    </div>
+                )}
+            </div>
+            {tooltip && <div className="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"><InfoIcon className="h-4 w-4 text-gray-400" title={tooltip} /></div>}
+        </GlassPanel>
+    );
+});
 
-function DashboardPage({ onNavigate }) { 
-    const [activeTab, setActiveTab] = useState('painel'); 
-    return ( 
-        <div className="p-4 sm:p-6 lg:p-8"> 
-            <div className="flex justify-between items-center mb-6"> 
-                <h2 className="text-3xl font-bold text-gray-900 dark:text-white">Dashboard</h2> 
-            </div> 
-            <GlassPanel className="p-2 sm:p-4"> 
-                <Tabs value={activeTab} onValueChange={setActiveTab}> 
-                    <TabsList> 
-                        <TabsTrigger value="painel">Painel de Controle</TabsTrigger> 
-                        <TabsTrigger value="financeiro">Saúde Financeira</TabsTrigger> 
-                        <TabsTrigger value="performance">Performance da Equipe</TabsTrigger> 
-                        <TabsTrigger value="carteira">Análise de Carteira</TabsTrigger> 
-                    </TabsList> 
-                    <TabsContent value="painel"><PainelDeControleTab onNavigate={onNavigate} /></TabsContent> 
-                    <TabsContent value="financeiro"><SaudeFinanceiraTab /></TabsContent> 
-                    <TabsContent value="performance"><PerformanceEquipeTab /></TabsContent> 
-                    <TabsContent value="carteira"><AnaliseCarteiraTab /></TabsContent> 
-                </Tabs>
-            </GlassPanel> 
-        </div> 
-    ); 
+// --- COMPONENTE 2: GRÁFICO DE PERFORMANCE DE VENDAS ---
+const Dashboard2_SalesPerformanceChart = memo(({ data, dataKey, title }) => {
+    const { theme } = useTheme();
+    const CustomTooltip = ({ active, payload, label }) => {
+        if (active && payload && payload.length) {
+            return (
+                <div className="bg-white/80 dark:bg-black/80 backdrop-blur-sm p-3 border border-gray-200 dark:border-white/20 rounded-lg shadow-lg">
+                    <p className="font-bold text-gray-900 dark:text-white">{`Data: ${label}`}</p>
+                    <p className="text-cyan-600 dark:text-cyan-400">{`${title}: ${payload[0].value}`}</p>
+                </div>
+            );
+        }
+        return null;
+    };
+
+    return (
+        <GlassPanel className="p-6 col-span-1 lg:col-span-2">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">{title}</h3>
+            <div className="w-full h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={data} margin={{ top: 5, right: 20, left: -10, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={theme === 'dark' ? "rgba(255, 255, 255, 0.1)" : "rgba(0, 0, 0, 0.1)"} />
+                        <XAxis dataKey="name" tick={{ fill: theme === 'dark' ? '#a0aec0' : '#4a5568', fontSize: 12 }} />
+                        <YAxis allowDecimals={false} tick={{ fill: theme === 'dark' ? '#a0aec0' : '#4a5568', fontSize: 12 }} />
+                        <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(6,182,212,0.1)' }}/>
+                        <Bar dataKey={dataKey} fill="#06B6D4" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                </ResponsiveContainer>
+            </div>
+        </GlassPanel>
+    );
+});
+
+// --- COMPONENTE 3: FEED DE ATIVIDADES RECENTES ---
+const Dashboard2_ActivityFeed = memo(({ activities }) => {
+    const getIcon = (actionType) => {
+        switch (actionType) {
+            case 'CRIAÇÃO':
+            case 'CRIAÇÃO AUTOMÁTICA':
+                return <PlusCircleIcon className="h-5 w-5 text-green-500" />;
+            case 'EDIÇÃO':
+                return <PencilIcon className="h-5 w-5 text-yellow-500" />;
+            case 'EXCLUSÃO':
+                return <Trash2Icon className="h-5 w-5 text-red-500" />;
+            case 'CONCLUSÃO':
+                return <CheckSquareIcon className="h-5 w-5 text-cyan-500" />;
+            default:
+                return <InfoIcon className="h-5 w-5 text-gray-500" />;
+        }
+    };
+
+    return (
+        <GlassPanel className="p-6">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Atividade Recente</h3>
+            <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
+                {activities.length > 0 ? activities.map(log => (
+                    <div key={log.id} className="flex items-start gap-3">
+                        <div className="flex-shrink-0 pt-1">{getIcon(log.actionType)}</div>
+                        <div className="flex-grow">
+                            <p className="text-sm text-gray-800 dark:text-gray-200">
+                                <span className="font-semibold">{log.userName || 'Sistema'}</span> {log.description}
+                            </p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{formatDateTime(log.timestamp)}</p>
+                        </div>
+                    </div>
+                )) : <p className="text-sm text-center text-gray-500 py-4">Nenhuma atividade registrada ainda.</p>}
+            </div>
+        </GlassPanel>
+    );
+});
+
+// --- COMPONENTE 4: LISTA DE RENOVAÇÕES PRÓXIMAS ---
+const Dashboard2_UpcomingRenewals = memo(({ clients, onNavigate }) => {
+    return (
+         <GlassPanel className="p-6">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Contratos a Renovar (Próx. 90 dias)</h3>
+            <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
+                {clients.length > 0 ? clients.map(({ client, daysLeft }) => (
+                     <div key={client.id} className="p-3 bg-yellow-100/30 dark:bg-yellow-900/20 rounded-lg flex items-center justify-between">
+                        <div>
+                            <p className="text-sm font-semibold text-yellow-800 dark:text-yellow-200">{client.general?.companyName || client.general?.holderName}</p>
+                            <p className="text-xs text-yellow-700 dark:text-yellow-300">Vence em {daysLeft} dias</p>
+                        </div>
+                        <Button size="sm" variant="outline" onClick={() => onNavigate('client-details', client.id)}>Ver</Button>
+                    </div>
+                )) : <p className="text-sm text-center text-gray-500 py-4">Nenhuma renovação nos próximos 90 dias.</p>}
+            </div>
+        </GlassPanel>
+    );
+});
+
+function ProductionPage({ onNavigate }) {
+    const { productions, users, partners, operators, addProduction, updateProduction, deleteProduction, loading } = useData();
+    const { toast } = useToast();
+    const confirm = useConfirm();
+
+    const [isModalOpen, setModalOpen] = useState(false);
+    const [editingProduction, setEditingProduction] = useState(null);
+    
+    const [selectedMonth, setSelectedMonth] = useState(() => {
+        const now = new Date();
+        return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    });
+
+    const processedData = useMemo(() => {
+        const dataByMonth = {};
+        const allMonths = new Set();
+        
+        productions.forEach(prod => {
+            const date = prod.saleDate ? new Date(prod.saleDate + 'T00:00:00') : prod.createdAt?.toDate();
+            if (!date) return;
+            
+            const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+            allMonths.add(monthKey);
+
+            if (!dataByMonth[monthKey]) {
+                dataByMonth[monthKey] = {
+                    entries: [],
+                    totals: {
+                        brokers: {},
+                        partners: {},
+                        monthly: 0
+                    }
+                };
+            }
+            dataByMonth[monthKey].entries.push(prod);
+        });
+
+        const sortedMonths = Array.from(allMonths).sort().reverse();
+        
+        if (!allMonths.has(selectedMonth) && !sortedMonths.includes(selectedMonth)) {
+        sortedMonths.unshift(selectedMonth);
+      }
+
+        const monthData = dataByMonth[selectedMonth];
+        if(monthData){
+            monthData.entries.forEach(prod => {
+                 const broker = users.find(u => u.id === prod.brokerId);
+                 const commission = parseFloat(prod.commissionValue) || 0;
+                 const award = parseFloat(prod.awardValue) || 0;
+                 
+                 if(broker) {
+                     dataByMonth[selectedMonth].totals.brokers[broker.name] = (dataByMonth[selectedMonth].totals.brokers[broker.name] || 0) + commission + award;
+                 }
+
+                 if(prod.partner) {
+                     dataByMonth[selectedMonth].totals.partners[prod.partner] = (dataByMonth[selectedMonth].totals.partners[prod.partner] || 0) + award;
+                 }
+                 dataByMonth[selectedMonth].totals.monthly += commission + award;
+            });
+        }
+
+        return { months: sortedMonths, data: dataByMonth[selectedMonth] || { entries: [], totals: { brokers: {}, partners: {}, monthly: 0 } } };
+
+    }, [productions, selectedMonth, users]);
+
+    const handleOpenModal = (prod = null) => {
+        setEditingProduction(prod);
+        setModalOpen(true);
+    };
+
+    const handleSave = async (data) => {
+        const result = data.id 
+            ? await updateProduction(data.id, data) 
+            : await addProduction(data);
+
+        if (result) {
+            toast({ title: "Sucesso!", description: `Produção para ${data.clientName} foi salva.` });
+            setModalOpen(false);
+        } else {
+            toast({ title: "Erro", description: "Não foi possível salvar a produção.", variant: 'destructive' });
+        }
+    };
+    
+    const handleDelete = async (prod) => {
+        try {
+            await confirm({ title: `Excluir produção de ${prod.clientName}?`, description: "Esta ação não pode ser desfeita." });
+            await deleteProduction(prod.id, prod.clientName);
+            toast({ title: "Excluído!", description: "A entrada de produção foi removida." });
+        } catch (e) {}
+    };
+
+    return (
+        <div className="p-4 sm:p-6 lg:p-8">
+            <div className="flex flex-wrap justify-between items-center mb-6 gap-4">
+                <h2 className="text-3xl font-bold text-gray-900 dark:text-white">Relatório de Produção</h2>
+                 <div className="flex items-center gap-2">
+                    <Select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)}>
+                        {(processedData.months || []).map(month => {
+                            const [year, monthNum] = month.split('-');
+                            const date = new Date(year, monthNum - 1);
+                            const monthName = date.toLocaleString('pt-BR', { month: 'long' });
+                            return <option key={month} value={month}>{`${monthName.charAt(0).toUpperCase() + monthName.slice(1)} ${year}`}</option>
+                        })}
+                    </Select>
+                     <Button onClick={() => handleOpenModal()} variant="violet"><PlusCircleIcon className="h-5 w-5 mr-2" />Lançar Produção</Button>
+                </div>
+            </div>
+
+            <GlassPanel className="p-6 mb-8">
+                <div className="overflow-x-auto">
+                    <table className="min-w-full">
+                         <thead className="border-b-2 border-gray-300 dark:border-white/20">
+                            <tr>
+                                {['Cliente', 'Data Venda', 'Vigência', 'Operadora', 'Parceiro', 'Corretor', 'Comissão', 'Prêmio', 'Ações'].map(h => 
+                                    <th key={h} className="px-4 py-3 text-left text-sm font-semibold text-gray-500 dark:text-gray-300">{h}</th>
+                                )}
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200 dark:divide-white/10">
+                            {/* CORREÇÃO APLICADA AQUI */}
+                            {(processedData.data.entries || []).map(prod => {
+                                const broker = users.find(u => u.id === prod.brokerId);
+                                return (
+                                    <tr key={prod.id}>
+                                        <td className="px-4 py-3 font-medium text-gray-900 dark:text-white">{prod.clientName}</td>
+                                        <td className="px-4 py-3">{formatDate(prod.saleDate)}</td>
+                                        <td className="px-4 py-3">{formatDate(prod.effectiveDate)}</td>
+                                        <td className="px-4 py-3">{prod.operator}</td>
+                                        <td className="px-4 py-3">{prod.partner}</td>
+                                        <td className="px-4 py-3">{broker?.name || 'N/A'}</td>
+                                        <td className="px-4 py-3">{formatCurrency(prod.commissionValue)}</td>
+                                        <td className="px-4 py-3">{formatCurrency(prod.awardValue)}</td>
+                                        <td className="px-4 py-3">
+                                            <div className="flex items-center gap-1">
+                                                <Button size="sm" variant="outline" onClick={() => onNavigate('convert-production', prod.id)} disabled={prod.status === 'Convertido em Cliente'}>
+                                                  {prod.status === 'Convertido em Cliente' ? 'Convertido' : 'Converter'}
+                                                </Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => handleOpenModal(prod)}><PencilIcon className="h-4 w-4"/></Button>
+                                                <Button size="icon" variant="ghost" className="h-8 w-8 text-red-500/70" onClick={() => handleDelete(prod)}><Trash2Icon className="h-4 w-4"/></Button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                )
+                            })}
+                             {processedData.data.entries.length === 0 && !loading && (
+                                <tr>
+                                    <td colSpan="9">
+                                      <EmptyState title="Sem Produção" message="Nenhuma produção foi lançada para o mês selecionado." onAction={() => handleOpenModal()} actionText="Lançar Primeira Produção"/>
+                                    </td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </GlassPanel>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <GlassPanel className="p-6">
+                     <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Totais por Corretor</h3>
+                     <table className="min-w-full">
+                        <tbody>
+                             {Object.entries(processedData.data.totals.brokers).map(([name, value]) => (
+                                 <tr key={name} className="border-b border-gray-200 dark:border-white/10 last:border-b-0">
+                                     <td className="py-2 font-medium text-gray-700 dark:text-gray-300">TOTAL {name.toUpperCase()}</td>
+                                     <td className="py-2 text-right font-semibold text-gray-900 dark:text-white">{formatCurrency(value)}</td>
+                                 </tr>
+                             ))}
+                             <tr className="border-t-2 border-gray-300 dark:border-white/20">
+                                 <td className="py-2 font-bold text-lg text-gray-800 dark:text-white">TOTAL MENSAL</td>
+                                 <td className="py-2 text-right font-bold text-lg text-gray-900 dark:text-white">{formatCurrency(processedData.data.totals.monthly)}</td>
+                             </tr>
+                        </tbody>
+                     </table>
+                </GlassPanel>
+                <GlassPanel className="p-6">
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Totais por Parceiro (Prêmios)</h3>
+                     <table className="min-w-full">
+                        <tbody>
+                             {Object.entries(processedData.data.totals.partners).map(([name, value]) => (
+                                 <tr key={name} className="border-b border-gray-200 dark:border-white/10 last:border-b-0">
+                                     <td className="py-2 font-medium text-gray-700 dark:text-gray-300">TOTAL {name.toUpperCase()}</td>
+                                     <td className="py-2 text-right font-semibold text-gray-900 dark:text-white">{formatCurrency(value)}</td>
+                                 </tr>
+                             ))}
+                        </tbody>
+                     </table>
+                </GlassPanel>
+            </div>
+
+            <ProductionModal 
+                isOpen={isModalOpen}
+                onClose={() => setModalOpen(false)}
+                onSave={handleSave}
+                production={editingProduction}
+                users={users}
+                partners={partners}
+                operators={operators}
+            />
+        </div>
+    );
 }
 
+
+// --- COMPONENTE PRINCIPAL: DASHBOARDPAGE 2.0 ---
+function DashboardPage({ onNavigate }) {
+    const { user } = useAuth();
+    const { clients, leads, tasks, timeline, leadColumns } = useData();
+    
+    const [dateRange, setDateRange] = useState(30);
+
+    const dashboardData = useMemo(() => {
+        const now = new Date();
+        const startDate = new Date();
+        startDate.setDate(now.getDate() - dateRange);
+        startDate.setHours(0, 0, 0, 0);
+
+        const clientsInPeriod = clients.filter(c => {
+    // Garante que o campo createdAt existe e tem o método toDate
+    if (c.createdAt && typeof c.createdAt.toDate === 'function') {
+        return c.createdAt.toDate() >= startDate;
+    }
+    // Se não for um timestamp, pode ser uma string ou outro formato, então não inclui no filtro
+    return false;
+});
+        const mrr = clients.reduce((sum, client) => {
+            const activeContract = client.contracts?.find(c => c.status === 'ativo');
+            return sum + (activeContract ? parseFloat(activeContract.contractValue) || 0 : 0);
+        }, 0);
+
+        const newClientsCount = clientsInPeriod.length;
+
+        const conversionColumn = leadColumns.find(c => c.isConversion);
+        const archiveColumn = leadColumns.find(c => c.isArchiveColumn);
+        
+        const leadsFinalizedInPeriod = leads.filter(l => {
+             const lastActivity = l.lastActivityDate?.toDate();
+             if(!lastActivity || lastActivity < startDate) return false;
+             return (conversionColumn && l.status === conversionColumn.title) || (archiveColumn && l.status === archiveColumn.title);
+        });
+        const leadsConvertedInPeriod = leadsFinalizedInPeriod.filter(l => conversionColumn && l.status === conversionColumn.title);
+        
+        const totalOutcomes = leadsFinalizedInPeriod.length;
+        const conversionRate = totalOutcomes > 0 ? (leadsConvertedInPeriod.length / totalOutcomes) * 100 : 0;
+        
+        const myTasks = tasks.filter(t => t.assignedTo === user?.uid);
+        const overdueTasks = myTasks.filter(t => t.dueDate && new Date(t.dueDate + 'T23:59:59') < now && t.status !== 'Concluída').length;
+        
+        const contractsToRenew = clients.map(client => {
+            const activeContract = client.contracts?.find(c => c.status === 'ativo' && c.renewalDate);
+            if (!activeContract) return null;
+            const renewalDate = new Date(activeContract.renewalDate + 'T00:00:00');
+            const daysLeft = Math.ceil((renewalDate - now) / (1000 * 60 * 60 * 24));
+            return (daysLeft >= 0 && daysLeft <= 90) ? { client, daysLeft } : null;
+        }).filter(Boolean).sort((a,b) => a.daysLeft - b.daysLeft);
+
+        const chartData = Array.from({ length: dateRange }, (_, i) => {
+            const date = new Date();
+            date.setDate(now.getDate() - i);
+            const dateKey = date.toLocaleDateString('pt-BR', {day: '2-digit', month: '2-digit'});
+            return { name: dateKey, NovosClientes: 0 };
+        }).reverse();
+        
+        clientsInPeriod.forEach(client => {
+            const dateKey = client.createdAt.toDate().toLocaleDateString('pt-BR', {day: '2-digit', month: '2-digit'});
+            const chartEntry = chartData.find(d => d.name === dateKey);
+            if(chartEntry) chartEntry.NovosClientes += 1;
+        });
+
+        const recentActivities = timeline.slice(0, 10);
+
+        return {
+            mrr,
+            newClientsCount,
+            conversionRate: conversionRate.toFixed(1),
+            overdueTasksCount: overdueTasks,
+            renewals: contractsToRenew,
+            chartData,
+            recentActivities,
+        };
+
+    }, [clients, leads, tasks, timeline, leadColumns, dateRange, user]);
+
+    const getGreeting = () => {
+        const hour = new Date().getHours();
+        if (hour < 5) return "Boa madrugada";
+        if (hour < 12) return "Bom dia";
+        if (hour < 18) return "Boa tarde";
+        return "Boa noite";
+    };
+
+    return (
+        <div className="p-4 sm:p-6 lg:p-8">
+            <div className="flex flex-wrap justify-between items-center mb-6 gap-4">
+                <div>
+                    <h2 className="text-3xl font-bold text-gray-900 dark:text-white">
+                        {getGreeting()}, {user?.name?.split(' ')[0]}!
+                    </h2>
+                    <p className="text-gray-500 dark:text-gray-400">Aqui está o resumo da sua operação.</p>
+                </div>
+                <div className="flex items-center gap-2 p-1 bg-gray-200/50 dark:bg-black/20 rounded-lg">
+                    {[7, 15, 30].map(days => (
+                        <Button 
+                            key={days}
+                            variant={dateRange === days ? 'default' : 'ghost'} 
+                            size="sm"
+                            onClick={() => setDateRange(days)}
+                        >
+                            Últimos {days} dias
+                        </Button>
+                    ))}
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-2 space-y-6">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-6">
+                       <Dashboard2_MetricCard 
+                           title="Faturamento Ativo (MRR)"
+                           value={formatCurrency(dashboardData.mrr)}
+                           icon={<DollarSignIcon />}
+                           tooltip="Receita Mensal Recorrente de todos os contratos ativos."
+                       />
+                       <Dashboard2_MetricCard 
+                           title="Novos Clientes"
+                           value={dashboardData.newClientsCount}
+                           icon={<UsersIcon />}
+                           tooltip={`Clientes adicionados nos últimos ${dateRange} dias.`}
+                       />
+                        <Dashboard2_MetricCard 
+                           title="Taxa de Conversão"
+                           value={`${dashboardData.conversionRate}%`}
+                           icon={<PercentIcon />}
+                           tooltip={`(Leads Ganhos / Total de Leads Finalizados) nos últimos ${dateRange} dias.`}
+                       />
+                        <Dashboard2_MetricCard 
+                           title="Minhas Tarefas Atrasadas"
+                           value={dashboardData.overdueTasksCount}
+                           icon={<ClockIcon />}
+                           tooltip="Suas tarefas que passaram do prazo e não foram concluídas."
+                           trendType={dashboardData.overdueTasksCount > 0 ? 'negative' : 'positive'}
+                       />
+                    </div>
+                    
+                    <Dashboard2_SalesPerformanceChart 
+                        data={dashboardData.chartData} 
+                        dataKey="NovosClientes"
+                        title="Novos Clientes por Dia"
+                    />
+                </div>
+
+                <div className="space-y-6">
+                    <Dashboard2_UpcomingRenewals clients={dashboardData.renewals} onNavigate={onNavigate} />
+                    <Dashboard2_ActivityFeed activities={dashboardData.recentActivities} />
+                </div>
+            </div>
+        </div>
+    );
+}
 // --- GERENCIADOR DE TAREFAS AUTOMÁTICAS ---
 function BoletoTaskManager() {
     // 1. OBTENÇÃO DE DADOS E FUNÇÕES
@@ -3910,112 +4947,136 @@ function BoletoTaskManager() {
 }
 // --- ORQUESTRADOR PRINCIPAL DA APLICAÇÃO ---
 function MainApp() {
-    const [page, setPage] = useState('dashboard');
-    const [selectedItemId, setSelectedItemId] = useState(null);
-    const [pageOptions, setPageOptions] = useState({});
-    const [isSidebarOpen, setSidebarOpen] = useState(false);
-    const [isCommandPaletteOpen, setCommandPaletteOpen] = useState(false);
-    const data = useData();
-    const { toast } = useToast();
-    const [itemDetails, setItemDetails] = useState(null);
-    const { preferences } = usePreferences();
-    const [taskModalState, setTaskModalState] = useState({ isOpen: false, task: null });
+    const [page, setPage] = useState('dashboard');
+    const [selectedItemId, setSelectedItemId] = useState(null);
+    const [pageOptions, setPageOptions] = useState({});
+    const [isSidebarOpen, setSidebarOpen] = useState(false);
+    const [isCommandPaletteOpen, setCommandPaletteOpen] = useState(false);
+    const data = useData();
+    const { toast } = useToast();
+    const [itemDetails, setItemDetails] = useState(null);
+    const { preferences } = usePreferences();
+    const [taskModalState, setTaskModalState] = useState({ isOpen: false, task: null });
 
-    const handleNavigate = (targetPage, itemId = null, options = {}) => {
-        setPage(targetPage);
-        setSelectedItemId(itemId);
-        setPageOptions(options);
-        setSidebarOpen(false);
-        setCommandPaletteOpen(false);
-    };
-    
-    useEffect(() => {
-        if ((page === 'client-details' || page === 'edit-client' || page === 'convert-lead') && selectedItemId) {
-            const item = (page === 'convert-lead') ? data.leads.find(l => l.id === selectedItemId) : data.getClientById(selectedItemId);
-            setItemDetails(item);
-        } else {
-            setItemDetails(null);
-        }
-    }, [selectedItemId, page, data.getClientById, data.clients, data.leads]);
-    
-    useEffect(() => {
-        const handleKeyDown = (e) => {
-            if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-                e.preventDefault();
-                setCommandPaletteOpen(prev => !prev);
-            }
-        };
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, []);
-    
-    const handleSaveClient = async (savedClient, leadIdToDelete = null) => {
-        if (leadIdToDelete) {
-            const lead = data.leads.find(l => l.id === leadIdToDelete);
-            if (lead) {
-                await data.deleteLead(leadIdToDelete, lead.name);
-                toast({ title: "Lead Convertido!", description: `${lead.name} agora é um cliente.` });
-            }
-        }
-        setItemDetails(savedClient);
-        handleNavigate(savedClient?.id ? 'client-details' : 'clients', savedClient?.id);
-        toast({ title: "Sucesso", description: `Cliente ${savedClient.general.holderName} salvo.` });
-    };
-    
-    const handleSaveTask = async (taskData) => {
-        const result = await data.addTask(taskData);
-        if(result) {
-            toast({ title: "Tarefa Criada!", description: `A tarefa "${taskData.title}" foi adicionada.`});
-            setTaskModalState({ isOpen: false, task: null });
-        } else {
-            toast({ title: "Erro", description: "Não foi possível criar a tarefa.", variant: 'destructive'});
-        }
-    };
+    const handleNavigate = (targetPage, itemId = null, options = {}) => {
+        setPage(targetPage);
+        setSelectedItemId(itemId);
+        setPageOptions(options);
+        setSidebarOpen(false);
+        setCommandPaletteOpen(false);
+    };
 
-    const executeCortexPlan = async (plan) => {
-        for (const step of plan) {
-            const { action, payload } = step;
-            switch(action) {
-                case 'navigate': handleNavigate(payload.page); break;
-                case 'create_task': setTaskModalState({ isOpen: true, task: { title: payload.title || '', description: payload.description || '', dueDate: payload.dueDate || '', assignedTo: payload.assignedTo || '', priority: 'Média', status: 'Pendente' } }); break;
-                default: toast({ title: "Ação não reconhecida", description: `Córtex sugeriu: ${action}`, variant: 'destructive' });
-            }
-        }
-    };
+    useEffect(() => {
+        if (selectedItemId) {
+            let item = null;
+            if (page === 'client-details' || page === 'edit-client') {
+                item = data.getClientById(selectedItemId);
+            } else if (page === 'convert-lead') {
+                item = data.leads.find(l => l.id === selectedItemId);
+            } else if (page === 'convert-production') {
+                item = data.productions.find(p => p.id === selectedItemId);
+            }
+            setItemDetails(item);
+        } else {
+            setItemDetails(null);
+        }
+    }, [selectedItemId, page, data]);
+    
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+                e.preventDefault();
+                setCommandPaletteOpen(prev => !prev);
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, []);
+    
+    const handleSaveClient = async (savedClient, sourceItem = null) => {
+        if (sourceItem) {
+            if (sourceItem.type === 'lead' && sourceItem.id) {
+                await data.deleteLead(sourceItem.id, sourceItem.name);
+                toast({ title: "Lead Convertido!", description: `${sourceItem.name} agora é um cliente.` });
+            }
+            
+            if (sourceItem.type === 'production' && sourceItem.id) {
+                await data.updateProduction(sourceItem.id, { ...sourceItem.originalData, status: 'Convertido em Cliente' });
+                toast({ title: "Produção Convertida!", description: `A produção de ${sourceItem.name} agora é um cliente.` });
+            }
+        }
 
-    const renderContent = () => {
-        switch (page) {
-            case 'dashboard': return <DashboardPage onNavigate={handleNavigate} />;
-            case 'leads': return <LeadsPage onNavigate={handleNavigate} />;
-            case 'clients': return <ClientsList onClientSelect={(id) => handleNavigate('client-details', id)} onAddClient={() => handleNavigate('add-client')} />;
-            case 'client-details': return <ClientDetails client={itemDetails} onBack={() => handleNavigate('clients')} onEdit={(client, options) => handleNavigate('edit-client', client.id, options)} />;
-            case 'add-client': return <ClientForm onSave={handleSaveClient} onCancel={() => handleNavigate('clients')} />;
-            case 'edit-client': return <ClientForm client={itemDetails} onSave={handleSaveClient} onCancel={() => handleNavigate('client-details', itemDetails.id)} initialTab={pageOptions.initialTab} />;
-            case 'convert-lead': return <ClientForm isConversion={true} leadData={itemDetails} onSave={handleSaveClient} onCancel={() => handleNavigate('leads')} />;
-            case 'commissions': return <CommissionsPage />;
-            case 'tasks': return <TasksPage />;
-            case 'calendar': return <CalendarPage onNavigate={handleNavigate} />;
-            case 'timeline': return <TimelinePage />;
-            case 'corporate': return <CorporatePage />;
-            case 'profile': return <ProfilePage />;
-            default: return <DashboardPage onNavigate={handleNavigate} />;
-        }
-    };
-    
-    return (
-        <div className="min-h-screen bg-gray-50 dark:bg-[#0D1117] text-gray-800 dark:text-gray-200 font-sans">
-            <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap'); body { font-family: 'Inter', sans-serif; } .prose { color: #374151; } .dark .prose-invert { color: #d1d5db; } .dark .prose ul { list-style-type: disc; padding-left: 1.5rem; } .dark .prose li { margin-top: 0.25em; margin-bottom: 0.25em; } .cortex-active { border: 1px solid rgba(192, 38, 211, 0.5); box-shadow: 0 0 15px rgba(192, 38, 211, 0.3); animation: pulse-violet 2.5s infinite; } @keyframes pulse-violet { 0% { box-shadow: 0 0 10px rgba(192, 38, 211, 0.2); } 50% { box-shadow: 0 0 25px rgba(192, 38, 211, 0.5); } 100% { box-shadow: 0 0 10px rgba(192, 38, 211, 0.2); } } ::-webkit-scrollbar { width: 8px; height: 8px; } ::-webkit-scrollbar-track { background: #f1f5f9; } .dark ::-webkit-scrollbar-track { background: #0D1117; } ::-webkit-scrollbar-thumb { background: #a855f7; border-radius: 4px; } .dark ::-webkit-scrollbar-thumb { background: #C026D3; } ::-webkit-scrollbar-thumb:hover { background: #9333ea; } .dark ::-webkit-scrollbar-thumb:hover { background: #a31db1; } select option { background: white !important; color: #1f2937 !important; } .dark select option { background: #161b22 !important; color: #e5e7eb !important; }`}</style>
-            <BoletoTaskManager />
-            <CortexCommand isOpen={isCommandPaletteOpen} setIsOpen={setCommandPaletteOpen} onNavigate={handleNavigate} onExecutePlan={executeCortexPlan} />
-            <Sidebar onNavigate={handleNavigate} currentPage={page} isSidebarOpen={isSidebarOpen} />
-            <div className="lg:pl-64 transition-all duration-300">
-                <Header onToggleSidebar={() => setSidebarOpen(!isSidebarOpen)} onOpenCommandPalette={() => setCommandPaletteOpen(true)} />
-                <main className={cn("relative", preferences.uppercaseMode && "uppercase")}>{renderContent()}</main>
-            </div>
-            {isSidebarOpen && <div onClick={() => setSidebarOpen(false)} className="fixed inset-0 bg-black/60 z-30 lg:hidden"></div>}
-            <TaskModal isOpen={taskModalState.isOpen} onClose={() => setTaskModalState({ isOpen: false, task: null })} onSave={handleSaveTask} task={taskModalState.task} />
-        </div>
-    );
+        setItemDetails(savedClient);
+        handleNavigate(savedClient?.id ? 'client-details' : 'clients', savedClient?.id);
+        toast({ title: "Sucesso", description: `Cliente ${savedClient.general.holderName || savedClient.general.companyName} salvo.` });
+    };
+    
+    const handleSaveTask = async (taskData) => {
+        const result = await data.addTask(taskData);
+        if(result) {
+            toast({ title: "Tarefa Criada!", description: `A tarefa "${taskData.title}" foi adicionada.`});
+            setTaskModalState({ isOpen: false, task: null });
+        } else {
+            toast({ title: "Erro", description: "Não foi possível criar a tarefa.", variant: 'destructive'});
+        }
+    };
+
+    const executeCortexPlan = async (plan) => {
+        for (const step of plan) {
+            const { action, payload } = step;
+            switch(action) {
+                case 'navigate': handleNavigate(payload.page); break;
+                case 'create_task': setTaskModalState({ isOpen: true, task: { title: payload.title || '', description: payload.description || '', dueDate: payload.dueDate || '', assignedTo: payload.assignedTo || '', priority: 'Média', status: 'Pendente' } }); break;
+                default: toast({ title: "Ação não reconhecida", description: `Córtex sugeriu: ${action}`, variant: 'destructive' });
+            }
+        }
+    };
+    
+    const renderContent = () => {
+        switch (page) {
+            case 'dashboard': return <DashboardPage onNavigate={handleNavigate} />;
+            case 'leads': return <LeadsPage onNavigate={handleNavigate} />;
+            case 'clients': return <ClientsList onClientSelect={(id) => handleNavigate('client-details', id)} onAddClient={() => handleNavigate('add-client')} />;
+            case 'client-details': return <ClientDetails client={itemDetails} onBack={() => handleNavigate('clients')} onEdit={(client, options) => handleNavigate('edit-client', client.id, options)} />;
+            case 'add-client': return <ClientForm onSave={(client) => handleSaveClient(client)} onCancel={() => handleNavigate('clients')} />;
+            case 'edit-client': return <ClientForm client={itemDetails} onSave={(client) => handleSaveClient(client)} onCancel={() => handleNavigate('client-details', itemDetails.id)} initialTab={pageOptions.initialTab} />;
+            case 'convert-lead': return <ClientForm isConversion={true} leadData={itemDetails} onSave={(client, leadId) => handleSaveClient(client, { type: 'lead', id: leadId, name: itemDetails?.name })} onCancel={() => handleNavigate('leads')} />;
+            
+            case 'convert-production': 
+                if (!itemDetails) return <div className="p-8 text-center">Carregando dados de pré-cadastro...</div>;
+                return <ClientForm 
+                           isConversion={true} 
+                           leadData={itemDetails.preCadastroData}
+                           onSave={(client) => handleSaveClient(client, { type: 'production', id: itemDetails.id, name: itemDetails.clientName, originalData: itemDetails })} 
+                           onCancel={() => handleNavigate('production')} 
+                       />;
+
+            case 'commissions': return <CommissionsPage />;
+            case 'production': return <ProductionPage onNavigate={handleNavigate} />;
+            case 'tasks': return <TasksPage />;
+            case 'calendar': return <CalendarPage onNavigate={handleNavigate} />;
+            case 'timeline': return <TimelinePage />;
+            // CORREÇÃO APLICADA AQUI
+            case 'corporate': return <GestaoCorporativaPage />;
+            case 'profile': return <ProfilePage />;
+            default: return <DashboardPage onNavigate={handleNavigate} />;
+        }
+    };
+    
+    return (
+        <div className="min-h-screen bg-gray-50 dark:bg-[#0D1117] text-gray-800 dark:text-gray-200 font-sans">
+            <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap'); body { font-family: 'Inter', sans-serif; } .prose { color: #374151; } .dark .prose-invert { color: #d1d5db; } .dark .prose ul { list-style-type: disc; padding-left: 1.5rem; } .dark .prose li { margin-top: 0.25em; margin-bottom: 0.25em; } .cortex-active { border: 1px solid rgba(192, 38, 211, 0.5); box-shadow: 0 0 15px rgba(192, 38, 211, 0.3); animation: pulse-violet 2.5s infinite; } @keyframes pulse-violet { 0% { box-shadow: 0 0 10px rgba(192, 38, 211, 0.2); } 50% { box-shadow: 0 0 25px rgba(192, 38, 211, 0.5); } 100% { box-shadow: 0 0 10px rgba(192, 38, 211, 0.2); } } ::-webkit-scrollbar { width: 8px; height: 8px; } ::-webkit-scrollbar-track { background: #f1f5f9; } .dark ::-webkit-scrollbar-track { background: #0D1117; } ::-webkit-scrollbar-thumb { background: #a855f7; border-radius: 4px; } .dark ::-webkit-scrollbar-thumb { background: #C026D3; } ::-webkit-scrollbar-thumb:hover { background: #9333ea; } .dark ::-webkit-scrollbar-thumb:hover { background: #a31db1; } select option { background: white !important; color: #1f2937 !important; } .dark select option { background: #161b22 !important; color: #e5e7eb !important; }`}</style>
+            <BoletoTaskManager />
+            <CortexCommand isOpen={isCommandPaletteOpen} setIsOpen={setCommandPaletteOpen} onNavigate={handleNavigate} onExecutePlan={executeCortexPlan} />
+            <Sidebar onNavigate={handleNavigate} currentPage={page} isSidebarOpen={isSidebarOpen} />
+            <div className="lg:pl-64 transition-all duration-300">
+                <Header onToggleSidebar={() => setSidebarOpen(!isSidebarOpen)} onOpenCommandPalette={() => setCommandPaletteOpen(true)} />
+                <main className={cn("relative", preferences.uppercaseMode && "uppercase")}>{renderContent()}</main>
+            </div>
+            {isSidebarOpen && <div onClick={() => setSidebarOpen(false)} className="fixed inset-0 bg-black/60 z-30 lg:hidden"></div>}
+            <TaskModal isOpen={taskModalState.isOpen} onClose={() => setTaskModalState({ isOpen: false, task: null })} onSave={handleSaveTask} task={taskModalState.task} />
+        </div>
+    );
 }
     const CortexCommand = ({ isOpen, setIsOpen, onNavigate, onExecutePlan }) => {
     const { user } = useAuth();
@@ -4219,6 +5280,7 @@ function MainApp() {
     { id: 'leads', label: 'Leads', icon: TargetIcon },
     { id: 'clients', label: 'Clientes', icon: UsersIcon },
     { id: 'commissions', label: 'Comissões', icon: PercentIcon },
+    { id: 'production', label: 'Produção', icon: TrendingUpIcon },
     { id: 'tasks', label: 'Minhas Tarefas', icon: CheckSquareIcon },
     { id: 'calendar', label: 'Calendário', icon: CalendarIcon },
     { id: 'timeline', label: 'Time-Line', icon: HistoryIcon },

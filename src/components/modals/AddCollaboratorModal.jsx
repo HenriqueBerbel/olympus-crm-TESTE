@@ -5,12 +5,11 @@ import Input from '../Input';
 import Select from '../Select';
 import Button from '../Button';
 
-// O modal agora recebe 'users' e 'roles' como props
 const AddCollaboratorModal = ({ isOpen, onClose, onSave, users = [], roles = [] }) => {
     const [formData, setFormData] = useState({ name: '', email: '', password: '', roleId: '', supervisorId: '' });
 
     useEffect(() => {
-      // Reseta o formulário e define um cargo padrão quando o modal abre
+      // Reseta o formulário e define um cargo padrão apenas quando o modal abre
       if (isOpen) {
           const defaultRole = roles.find(r => r.name === 'Corretor');
           setFormData({ 
@@ -21,7 +20,10 @@ const AddCollaboratorModal = ({ isOpen, onClose, onSave, users = [], roles = [] 
               supervisorId: '' 
             });
       }
-    }, [isOpen, roles]);
+    // --- CORREÇÃO APLICADA AQUI ---
+    // Removemos 'roles' da lista de dependências.
+    // Agora este efeito só roda quando 'isOpen' muda.
+    }, [isOpen]);
 
     const handleChange = (e) => setFormData(prev => ({...prev, [e.target.name]: e.target.value }));
     
@@ -46,18 +48,15 @@ const AddCollaboratorModal = ({ isOpen, onClose, onSave, users = [], roles = [] 
                     <Label>Cargo (Nível de Permissão)</Label>
                     <Select name="roleId" value={formData.roleId} onChange={handleChange}>
                         <option value="">Selecione um cargo...</option>
-                        {/* Garante que 'roles' seja um array antes de mapear */}
                         {(roles || []).map(role => <option key={role.id} value={role.id}>{role.name}</option>)}
                     </Select>
                 </div>
                 
-                {/* O dropdown de supervisor só aparece se o cargo selecionado for 'Corretor' */}
                 {roles.find(r => r.id === formData.roleId)?.name === 'Corretor' && (
                     <div>
                         <Label>Vincular ao Supervisor</Label>
                         <Select name="supervisorId" value={formData.supervisorId} onChange={handleChange}>
                             <option value="">Nenhum</option>
-                            {/* Garante que 'supervisors' seja um array antes de mapear */}
                             {(supervisors || []).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                         </Select>
                     </div>

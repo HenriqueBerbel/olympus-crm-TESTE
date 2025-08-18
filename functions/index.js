@@ -1,55 +1,60 @@
+// Arquivo: functions/index.js
+
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 
 admin.initializeApp();
 
-exports.createNewUser = functions.https.onCall(async (data, context) => {
+/**
+ * Cloud Function para deletar um usuário completamente.
+ * Esta função é "chamável", ou seja, nosso app React pode invocá-la.
+ */
+exports.deleteUserAccount = functions.https.onCall(async (data, context) => {
+  // 1. Verificação de Segurança: A chamada foi feita por um usuário logado?
   if (!context.auth) {
     throw new functions.https.HttpsError(
-      "unauthenticated",
-      "Apenas usuários autenticados podem criar novas contas."
+        "unauthenticated",
+        "Ação não permitida. Você precisa estar autenticado.",
     );
   }
 
-  const { name, email, password } = data; // Apenas os campos básicos
+  const callerUid = context.auth.uid; // ID de quem está chamando a função (o admin)
+  const userIdToDelete = data.uid; // ID de quem deve ser deletado (passado pelo app)
 
-  if (!name || !email || !password) {
-     throw new functions.https.HttpsError(
-      "invalid-argument",
-      "Nome, email e senha são obrigatórios."
+  // 2. Verificação de Permissão: O usuário que está chamando tem permissão para deletar?
+  const callerDoc = await admin.firestore().collection("users").doc(callerUid).get();
+  if (!callerDoc.exists || callerDoc.data().permissions?.managePermissions !== true) {
+    throw new functions.https.HttpsError(
+        "permission-denied",
+        "Você não tem permissão para executar esta ação.",
+    );
+  }
+
+  if (!userIdToDelete) {
+    throw new functions.https.HttpsError(
+        "invalid-argument",
+        "O ID do usuário a ser deletado não foi fornecido.",
     );
   }
 
   try {
-    const userRecord = await admin.auth().createUser({
-      email: email,
-      password: password,
-      displayName: name,
-    });
+    // 3. Execução: Se passou nas verificações, deleta o usuário de verdade.
+    console.log(`Admin ${callerUid} está tentando deletar usuário ${userIdToDelete}`);
 
-    // Para o MVP, todo novo usuário será criado como 'Admin' por padrão.
-    // Isso garante que todos possam ver tudo por enquanto.
-    const userProfile = {
-      name: name,
-      email: email,
-      permissionLevel: 'Admin', // Nível de permissão fixo para o MVP
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    };
+    // Deleta do Firebase Authentication (a parte do login)
+    await admin.auth().deleteUser(userIdToDelete);
 
-    await admin.firestore().collection("users").doc(userRecord.uid).set(userProfile);
-    
-    // Adiciona a permissão ao token do usuário
-    await admin.auth().setCustomUserClaims(userRecord.uid, { permissionLevel: 'Admin' });
+    // Deleta o documento do usuário do Firestore (a parte dos dados)
+    await admin.firestore().collection("users").doc(userIdToDelete).delete();
 
-    return { success: true, uid: userRecord.uid };
-
+    console.log(`Usuário ${userIdToDelete} deletado com sucesso.`);
+    return {success: true, message: "Usuário deletado com sucesso."};
   } catch (error) {
-    if (error.code === 'auth/email-already-exists') {
-        throw new functions.https.HttpsError('already-exists', 'Este endereço de email já está em uso.');
-    }
-     if (error.code === 'auth/invalid-password') {
-        throw new functions.https.HttpsError('invalid-argument', 'A senha deve ter no mínimo 6 caracteres.');
-    }
-    throw new functions.https.HttpsError('internal', 'Ocorreu um erro inesperado ao criar o usuário.');
+    console.error("Erro ao deletar usuário:", error);
+    throw new functions.https.HttpsError(
+        "internal",
+        "Ocorreu um erro interno ao tentar deletar o usuário.",
+        error.message,
+    );
   }
 });

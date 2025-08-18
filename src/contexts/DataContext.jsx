@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { getFirestore, collection, onSnapshot, addDoc, doc, updateDoc, deleteDoc, writeBatch, query, orderBy, where, serverTimestamp } from "firebase/firestore";
-import { db } from '../firebase/firebase.js'; // <-- CORREÇÃO APLICADA AQUI
+import { db } from '../firebase/firebase.js';
 import { useAuth } from './AuthContext.jsx';
 
 const DataContext = createContext();
@@ -21,6 +21,7 @@ export const DataProvider = ({ children }) => {
         completedEvents: undefined,
         partners: undefined,
         productions: undefined,
+        roles: undefined, // Adicionado para carregar os cargos
     });
     const [loading, setLoading] = useState(true);
 
@@ -53,7 +54,8 @@ export const DataProvider = ({ children }) => {
             commissions: 'commissions',
             completedEvents: 'completed_events',
             partners: 'partners',
-            productions: 'productions'
+            productions: 'productions',
+            roles: 'roles', // Adicionado para carregar os cargos
         };
         
         const unsubscribes = Object.entries(collectionsToFetch).map(([stateKey, collectionName]) => {
@@ -170,7 +172,8 @@ export const DataProvider = ({ children }) => {
         if(!db) return false;
         try {
             const dataToUpdate = { ...updatedData };
-            if (updatedData.status === 'Concluída' && (!data.tasks.find(t=>t.id === taskId).completedAt) ) {
+            const existingTask = (data.tasks || []).find(t => t.id === taskId);
+            if (updatedData.status === 'Concluída' && !existingTask?.completedAt) {
                 dataToUpdate.completedAt = serverTimestamp();
             }
             await updateDoc(doc(db, "tasks", taskId), dataToUpdate);

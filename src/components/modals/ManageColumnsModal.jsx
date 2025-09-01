@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { getFirestore, doc, collection, writeBatch } from "firebase/firestore";
+// REMOVIDO: As importações do Firestore não são mais necessárias neste componente.
+// import { getFirestore, doc, collection, writeBatch } from "firebase/firestore";
 import { useData } from '../../contexts/DataContext';
 import { useToast } from '../../contexts/NotificationContext';
 import Modal from '../Modal';
@@ -8,11 +9,12 @@ import Input from '../Input';
 import { cn } from '../../utils';
 import { GripVerticalIcon, CheckSquareIcon, ZapIcon, ArchiveIcon, Trash2Icon } from '../Icons';
 
-// CORREÇÃO: Alterado de "export const" para uma constante
+
 const ManageColumnsModal = ({ isOpen, onClose, onSave, columns, boardId, title, showConversionButton = false, showConclusionButton = false }) => {
     const { deleteKanbanColumn, leads, tasks } = useData();
     const { toast } = useToast();
-    const db = getFirestore();
+    // REMOVIDO: A instância do Firestore não é mais criada aqui.
+    // const db = getFirestore();
 
     const [localColumns, setLocalColumns] = useState([]);
     const [newColumnTitle, setNewColumnTitle] = useState("");
@@ -77,23 +79,15 @@ const ManageColumnsModal = ({ isOpen, onClose, onSave, columns, boardId, title, 
         }
     };
     
-    const handleSave = async () => {
-        const batch = writeBatch(db);
-        localColumns.forEach((col, index) => {
-            const { id, ...data } = col;
-            const docRef = id.startsWith('temp_') ? doc(collection(db, 'kanban_columns')) : doc(db, 'kanban_columns', id);
-            batch.set(docRef, { ...data, order: index }, { merge: true });
-        });
-        try {
-            await batch.commit();
-            toast({ title: "Sucesso!", description: "Estrutura do quadro foi salva." });
-            if (onSave) {
-                onSave(localColumns);
-            }
-            onClose();
-        } catch (error) {
-            toast({ title: "Erro", description: "Não foi possível salvar as alterações.", variant: 'destructive' });
+    // ALTERADO: A função agora é muito mais simples.
+    // Ela apenas entrega o estado atualizado das colunas para o componente pai através do onSave.
+    // O componente pai (LeadsPage) será o único responsável por fazer a chamada ao banco de dados.
+    const handleSave = () => {
+        if (onSave) {
+            onSave(localColumns);
         }
+        // A responsabilidade de fechar o modal (onClose) foi movida para o componente pai,
+        // que o fechará somente após o salvamento ser concluído com sucesso.
     };
 
     return (

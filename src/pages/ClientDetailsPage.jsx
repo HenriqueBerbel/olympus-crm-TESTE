@@ -25,22 +25,40 @@ import CortexTab from '../components/clients/CortexTab';
 import ContractsTab from '../components/clients/ContractsTab';
 import DocumentsTab from '../components/clients/DocumentsTab';
 
-// Subcomponente interno para a "Visão Geral"
+// ========================================================================
+//          *** CORREÇÃO APLICADA AQUI NO OVERVIEWTAB ***
+// ========================================================================
 const OverviewTab = ({ client }) => {
-    const clientType = client?.general?.clientType;
+    const { general, address } = client || {};
+    const clientType = general?.clientType;
+
     return (
         <>
-            {clientType === 'PME' && (
-                <FormSection title="Dados da Empresa">
-                    <DetailItem label="Nome da Empresa" value={client.general?.companyName} />
-                    <DetailItem label="CNPJ" value={client.general?.cnpj} />
-                    <DetailItem label="Status" value={client.general?.status} />
-                </FormSection>
-            )}
-            {/* Adicione outras visualizações para outros tipos de cliente se necessário */}
+            {/* Seção de Dados da Empresa expandida */}
+            <FormSection title="Dados da Empresa">
+                {clientType === 'PME' && <DetailItem label="Nome da Empresa" value={general?.companyName} />}
+                {clientType === 'PME' && <DetailItem label="CNPJ" value={general?.cnpj} />}
+                <DetailItem label="Nome do Responsável" value={general?.responsibleName} />
+                <DetailItem label="CPF do Responsável" value={general?.responsibleCpf} />
+                <DetailItem label="Status" value={general?.status} />
+            </FormSection>
+
+            {/* Nova Seção de Contato */}
+            <FormSection title="Contato">
+                <DetailItem label="Nome do Contato" value={general?.contactName} />
+                <DetailItem label="Cargo do Contato" value={general?.contactRole} />
+                <DetailItem label="Email Responsável" value={general?.email} />
+                <DetailItem label="Telefone Responsável" value={general?.phone} />
+            </FormSection>
+
+            {/* Seção de Endereço expandida */}
             <FormSection title="Endereço">
-                <DetailItem label="CEP" value={client.address?.cep} />
-                <DetailItem label="Logradouro" value={client.address?.street} />
+                <DetailItem label="CEP" value={address?.cep} />
+                <DetailItem label="Logradouro" value={address?.street} />
+                <DetailItem label="Complemento" value={address?.complement} />
+                <DetailItem label="Bairro" value={address?.neighborhood} />
+                <DetailItem label="Cidade" value={address?.city} />
+                <DetailItem label="Estado" value={address?.state} />
             </FormSection>
         </>
     );
@@ -51,7 +69,7 @@ const ClientDetailsPage = ({ client, onBack, onEdit }) => {
     const confirm = useConfirm();
     const [activeTab, setActiveTab] = useState('general');
     const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
-    const printRef = useRef(null); // Referência para a área que será impressa
+    const printRef = useRef(null); 
 
     if (!client) { return <div className="p-8 text-center">Carregando cliente...</div>; }
     const clientName = client.general?.companyName || client.general?.holderName || "Cliente";
@@ -65,35 +83,24 @@ const ClientDetailsPage = ({ client, onBack, onEdit }) => {
         } catch (e) { /* Cancelado */ }
     };
 
-    // --- NOVA LÓGICA PARA GERAR O PDF ---
     const handleGeneratePdf = async () => {
         const elementToPrint = printRef.current;
         if (!elementToPrint) return;
 
         setIsGeneratingPdf(true);
-
-        const canvas = await html2canvas(elementToPrint, {
-            scale: 2, // Aumenta a resolução da "foto" para melhor qualidade
-            useCORS: true,
-        });
-        
+        const canvas = await html2canvas(elementToPrint, { scale: 2, useCORS: true });
         const imgData = canvas.toDataURL('image/png');
         
-        // Define as dimensões do PDF (A4) e da imagem
         const pdf = new jsPDF('p', 'mm', 'a4');
         const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = pdf.internal.pageSize.getHeight();
         const imgWidth = canvas.width;
         const imgHeight = canvas.height;
         const ratio = imgWidth / imgHeight;
-        const finalImgWidth = pdfWidth - 20; // Largura da imagem com margens
+        const finalImgWidth = pdfWidth - 20;
         const finalImgHeight = finalImgWidth / ratio;
 
-        let position = 10; // Posição inicial com margem superior
-        pdf.addImage(imgData, 'PNG', 10, position, finalImgWidth, finalImgHeight);
-        
+        pdf.addImage(imgData, 'PNG', 10, 10, finalImgWidth, finalImgHeight);
         pdf.save(`relatorio_${clientName.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`);
-        
         setIsGeneratingPdf(false);
     };
 
@@ -105,7 +112,6 @@ const ClientDetailsPage = ({ client, onBack, onEdit }) => {
                     <h2 className="text-3xl font-bold text-gray-900 dark:text-white">{clientName}</h2>
                 </div>
                 <div className="flex gap-2">
-                    {/* --- NOVO BOTÃO DE DOWNLOAD PDF --- */}
                     <Button variant="outline" onClick={handleGeneratePdf} disabled={isGeneratingPdf}>
                         {isGeneratingPdf ? 'Gerando...' : <><DownloadIcon className="h-4 w-4 mr-2" />Baixar PDF</>}
                     </Button>
@@ -114,7 +120,6 @@ const ClientDetailsPage = ({ client, onBack, onEdit }) => {
                 </div>
             </header>
             
-            {/* Adicionamos a `ref` ao GlassPanel que envolve o conteúdo */}
             <GlassPanel ref={printRef} className="p-6">
                 <Tabs value={activeTab} onValueChange={setActiveTab}>
                     <TabsList>

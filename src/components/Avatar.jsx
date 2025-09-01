@@ -43,5 +43,6 @@ export const Avatar = ({ src, fallbackText, alt = '', className }) => {
     );
 };
 
+export default Avatar;
 // Não precisamos mais de AvatarImage e AvatarFallback separados.
 // O componente Avatar agora cuida de tudo.

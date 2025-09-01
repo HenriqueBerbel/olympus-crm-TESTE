@@ -23,7 +23,7 @@ import { PaletteIcon, PlusCircleIcon, PencilIcon, Trash2Icon, CheckSquareIcon, A
 
 
 // =================================================================================
-// SUBCOMPONENTES DA PÁGINA (MOVEMOS PARA FORA PARA MELHOR PERFORMANCE)
+// SUBCOMPONENTES DA PÁGINA
 // =================================================================================
 
 const TaskViewModal = memo(({ isOpen, onClose, task, users, clients, leads }) => {
@@ -243,16 +243,22 @@ const TasksPage = () => {
         } catch (e) {}
     };
 
+    // ========================================================================
+    //          *** CORREÇÃO APLICADA AQUI ***
+    // ========================================================================
     const handleSaveColumns = async (updatedColumns) => {
         const batch = writeBatch(db);
         updatedColumns.forEach((col, index) => {
             const { id, ...data } = col;
             const docRef = id.startsWith('temp_') ? doc(collection(db, 'kanban_columns')) : doc(db, 'kanban_columns', id);
-            batch.set(docRef, { ...data, order: index }, { merge: true });
+            // Garantimos que o boardId correto seja salvo
+            batch.set(docRef, { ...data, boardId: 'tasks', order: index }, { merge: true });
         });
         try {
             await batch.commit();
             toast({ title: "Sucesso!", description: "Estrutura do quadro de tarefas foi salva." });
+            // A LINHA ABAIXO FOI ADICIONADA PARA FECHAR O MODAL
+            setManageColumnsModalOpen(false);
         } catch (error) {
             toast({ title: "Erro", description: "Não foi possível salvar as alterações.", variant: 'destructive' });
         }
@@ -287,8 +293,8 @@ const TasksPage = () => {
                             icon={<PaletteIcon className="w-12 h-12 mb-4 text-gray-400" />}
                         />
                     </GlassPanel>
-                ) : Array.isArray(tasks) && tasks.length === 0 ? (
-                     <GlassPanel className="p-8">
+                ) : Array.isArray(tasks) && tasks.filter(t => !t.archived).length === 0 ? (
+                   <GlassPanel className="p-8">
                         <EmptyState
                             title="Nenhuma tarefa por aqui"
                             message="Crie sua primeira tarefa para começar a se organizar."

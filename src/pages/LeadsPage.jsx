@@ -3,6 +3,7 @@ import { getFirestore, collection, doc, writeBatch, serverTimestamp } from "fire
 
 // Hooks e Contextos
 import { useData } from '../contexts/DataContext';
+import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/NotificationContext';
 import { useConfirm } from '../contexts/ConfirmContext';
 
@@ -18,13 +19,13 @@ import EmptyState from '../components/EmptyState';
 // Modais Específicos
 import LeadModal from '../components/modals/LeadModal';
 import ManageColumnsModal from '../components/modals/ManageColumnsModal';
+import ShareModal from '../components/modals/ShareModal';
 
 // Ícones
-import { ArchiveIcon, PaletteIcon, PlusCircleIcon, PencilIcon, Trash2Icon, ZapIcon } from '../components/Icons';
-
+import { ArchiveIcon, PaletteIcon, PlusCircleIcon, PencilIcon, Trash2Icon, ZapIcon, Share2Icon } from '../components/Icons';
 
 // =============================================================================
-// SUBCOMPONENTES MEMOIZADOS
+// SUBCOMPONENTES
 // =============================================================================
 
 const ArchivedLeadsModal = memo(({ isOpen, onClose, allLeads, onUnarchive }) => {
@@ -72,13 +73,14 @@ const ArchivedLeadsModal = memo(({ isOpen, onClose, allLeads, onUnarchive }) => 
     );
 });
 
-const LeadCard = memo(({ lead, onEdit, onDelete }) => (
+const LeadCard = memo(({ lead, onEdit, onDelete, onShare }) => (
     <GlassPanel className="p-3 cursor-grab active:cursor-grabbing group">
         <div className="flex justify-between items-start">
             <p className="font-semibold text-sm text-gray-900 dark:text-white flex-grow truncate" title={lead.name}>{lead.name}</p>
             <div className="flex opacity-0 group-hover:opacity-100 transition-opacity">
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onEdit(lead)}><PencilIcon className="h-4 w-4" /></Button>
-                <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500/70" onClick={() => onDelete(lead)}><Trash2Icon className="h-4 w-4" /></Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7" title="Compartilhar" onClick={() => onShare(lead)}><Share2Icon className="h-4 w-4" /></Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7" title="Editar" onClick={() => onEdit(lead)}><PencilIcon className="h-4 w-4" /></Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500/70" title="Excluir" onClick={() => onDelete(lead)}><Trash2Icon className="h-4 w-4" /></Button>
             </div>
         </div>
         <p className="text-xs text-gray-500 dark:text-gray-400">{lead.company || 'Sem empresa'}</p>
@@ -145,14 +147,14 @@ const KanbanBoard = memo(({ columns, onDragEnd, children }) => {
     );
 });
 
-
 // =============================================================================
 // COMPONENTE PRINCIPAL DA PÁGINA
 // =============================================================================
 
 const LeadsPage = ({ onNavigate }) => {
     // Hooks
-    const { leads, updateLead, addLead, deleteLead, leadColumns } = useData();
+    const { leads, users, updateLead, addLead, deleteLead, leadColumns } = useData();
+    const { user: currentUser } = useAuth();
     const { toast } = useToast();
     const confirm = useConfirm();
     const db = getFirestore();
@@ -162,8 +164,9 @@ const LeadsPage = ({ onNavigate }) => {
     const [isManageColumnsModalOpen, setManageColumnsModalOpen] = useState(false);
     const [isArchiveModalOpen, setArchiveModalOpen] = useState(false);
     const [editingLead, setEditingLead] = useState(null);
+    const [isShareModalOpen, setShareModalOpen] = useState(false);
+    const [sharingLead, setSharingLead] = useState(null);
 
-    // Lógica de dados segura para o KanbanBoard
     const columnsForBoard = useMemo(() => {
         const safeLeadColumns = Array.isArray(leadColumns) ? leadColumns : [];
         const safeLeads = Array.isArray(leads) ? leads : [];
@@ -175,7 +178,6 @@ const LeadsPage = ({ onNavigate }) => {
         }, {});
     }, [leadColumns, leads]);
 
-    // Handlers
     const handleDragEnd = async (item, targetColumnId) => {
         const targetColumn = leadColumns.find(c => c.id === targetColumnId);
         if (!targetColumn) return;
@@ -228,13 +230,30 @@ const LeadsPage = ({ onNavigate }) => {
         setLeadModalOpen(true);
     };
 
+    // [CORREÇÃO APLICADA AQUI]
     const handleDeleteLead = async (lead) => {
         try {
-            await confirm({ title: `Excluir o lead ${lead.name}?`, description: "Esta ação é permanente." });
-            await deleteLead(lead.id, lead.name);
-            toast({ title: "Lead Excluído!" });
-        } catch (error) {
-            if (error) { toast({ title: "Erro ao excluir", description: error.message, variant: 'destructive' }); }
+            // A promise do confirm() vai REJEITAR se o usuário clicar em "Cancelar"
+            await confirm({
+                title: `Excluir o lead ${lead.name}?`,
+                description: "Esta ação é permanente e não pode ser desfeita.",
+                confirmText: "Sim, Excluir",
+                cancelText: "Cancelar"
+            });
+
+            // Se o código chegar aqui, o usuário clicou em "Confirmar"
+            const success = await deleteLead(lead.id, lead.name);
+
+            if (success) {
+                toast({ title: "Lead Excluído!", description: `"${lead.name}" foi removido com sucesso.` });
+            } else {
+                // Isso acontece se deleteLead no DataContext retornar false (ex: por uma regra de segurança)
+                toast({ title: "Erro ao Excluir", description: "Não foi possível remover o lead. Verifique as permissões.", variant: 'destructive' });
+            }
+        } catch (rejection) {
+            // Entra no catch quando o usuário clica em "Cancelar" no diálogo de confirmação.
+            // O importante é NÃO mostrar uma mensagem de erro aqui. Apenas logamos para debug.
+            console.log("Ação de exclusão cancelada pelo usuário.");
         }
     };
 
@@ -252,6 +271,20 @@ const LeadsPage = ({ onNavigate }) => {
             setLeadModalOpen(false);
         } catch (error) {
              toast({ title: "Erro ao Salvar", description: error.message, variant: 'destructive' });
+        }
+    };
+
+    const handleOpenShareModal = (lead) => {
+        setSharingLead(lead);
+        setShareModalOpen(true);
+    };
+
+    const handleSaveShare = async (leadId, data) => {
+        const success = await updateLead(leadId, data);
+        if(success) {
+            toast({ title: "Acesso atualizado!", description: "As permissões de compartilhamento foram salvas." });
+        } else {
+            toast({ title: "Erro!", description: "Não foi possível salvar as permissões.", variant: "destructive" });
         }
     };
     
@@ -296,7 +329,12 @@ const LeadsPage = ({ onNavigate }) => {
                 ) : (
                     <GlassPanel className="p-4">
                         <KanbanBoard columns={columnsForBoard} onDragEnd={handleDragEnd}>
-                            {(item) => <LeadCard lead={item} onEdit={handleOpenLeadModal} onDelete={handleDeleteLead} />}
+                            {(item) => <LeadCard 
+                                            lead={item} 
+                                            onEdit={handleOpenLeadModal} 
+                                            onDelete={handleDeleteLead}
+                                            onShare={handleOpenShareModal}
+                                        />}
                         </KanbanBoard>
                     </GlassPanel>
                 )}
@@ -324,6 +362,15 @@ const LeadsPage = ({ onNavigate }) => {
                 allLeads={leads}
                 onUnarchive={handleUnarchive}
             />
+            {sharingLead && (
+                <ShareModal
+                    isOpen={isShareModalOpen}
+                    onClose={() => setShareModalOpen(false)}
+                    onSave={handleSaveShare}
+                    documentData={sharingLead}
+                    allUsers={users}
+                />
+            )}
         </div>
     );
 };

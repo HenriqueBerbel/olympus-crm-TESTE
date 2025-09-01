@@ -1,81 +1,90 @@
 import React, { useState, createContext, useContext, useEffect } from 'react';
 import { 
-    createUserWithEmailAndPassword, 
     signInWithEmailAndPassword, 
     onAuthStateChanged, 
     signOut, 
-    updatePassword, 
-    EmailAuthProvider, 
-    reauthenticateWithCredential 
 } from "firebase/auth";
-import { doc, onSnapshot, setDoc, deleteDoc, updateDoc, getDoc } from "firebase/firestore";
-import { db, auth } from '../firebase/firebase.js';
+import { httpsCallable } from "firebase/functions";
+import { doc, onSnapshot, updateDoc } from "firebase/firestore";
+import { db, auth, functions } from '../firebase/firebase.js';
 
-// Cria o contexto de autenticação
 const AuthContext = createContext();
 
-/**
- * Provider que gerencia todo o estado de autenticação, dados do usuário e permissões.
- */
 export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        // Listener principal que reage a logins e logouts do Firebase
+        // [MELHORIA] Gerenciamento mais robusto dos listeners para evitar memory leaks.
+        let unsubscribeUserSnapshot = () => {};
+        let unsubscribeRoleSnapshot = () => {};
+
         const unsubscribeAuth = onAuthStateChanged(auth, (firebaseUser) => {
+            // Limpa listeners antigos sempre que o estado de autenticação muda
+            unsubscribeUserSnapshot();
+            unsubscribeRoleSnapshot();
+
             if (firebaseUser) {
-                // Se o usuário está logado, busca seus dados detalhados no Firestore
                 const userDocRef = doc(db, 'users', firebaseUser.uid);
                 
-                // onSnapshot ouve em tempo real. Se o cargo do usuário mudar, a app reflete na hora.
-                const unsubscribeSnapshot = onSnapshot(userDocRef, async (userDoc) => {
+                unsubscribeUserSnapshot = onSnapshot(userDocRef, (userDoc) => {
+                    // Limpa o listener de 'role' antigo antes de criar um novo
+                    unsubscribeRoleSnapshot();
+
                     if (userDoc.exists()) {
                         const userData = userDoc.data();
-                        let roleData = { name: 'Sem Cargo', permissions: {} }; // Cargo padrão
-
-                        // **MELHORIA:** Busca os detalhes do cargo (role) associado ao usuário
+                        
+                        // Garante que existe um roleId antes de tentar buscar
                         if (userData.roleId) {
                             const roleDocRef = doc(db, 'roles', userData.roleId);
-                            const roleDocSnap = await getDoc(roleDocRef);
-                            if (roleDocSnap.exists()) {
-                                roleData = roleDocSnap.data();
-                            }
+                            unsubscribeRoleSnapshot = onSnapshot(roleDocRef, (roleDoc) => {
+                                const roleData = roleDoc.exists() ? { id: roleDoc.id, ...roleDoc.data() } : { name: 'Sem Cargo', permissions: {} };
+                                setUser({
+                                    uid: firebaseUser.uid,
+                                    email: firebaseUser.email,
+                                    ...userData,
+                                    role: roleData,
+                                });
+                                setLoading(false);
+                            });
+                        } else {
+                             // Caso o usuário não tenha um roleId definido
+                             setUser({
+                                uid: firebaseUser.uid,
+                                email: firebaseUser.email,
+                                ...userData,
+                                role: { name: 'Sem Cargo', permissions: {} },
+                            });
+                            setLoading(false);
                         }
-                        
-                        // Monta o objeto de usuário final, combinando tudo
-                        setUser({
-                            uid: firebaseUser.uid,
-                            email: firebaseUser.email,
-                            ...userData,      // name, avatar, etc.
-                            role: roleData,   // Objeto completo do cargo com as permissões
-                        });
-
                     } else {
-                        // Caso raro: usuário existe na autenticação mas não no banco.
-                        // Pode acontecer se a criação do documento falhar.
+                        // Caso o documento do usuário não exista no Firestore
                         setUser({ 
                             uid: firebaseUser.uid, 
                             email: firebaseUser.email,
-                            name: 'Usuário Incompleto',
+                            name: firebaseUser.displayName || 'Usuário Incompleto',
                             role: { name: 'Desconhecido', permissions: {} }
                         });
+                        setLoading(false);
                     }
+                }, (error) => {
+                    console.error("Erro no listener do documento do usuário:", error);
+                    setUser(null);
                     setLoading(false);
                 });
-
-                return () => unsubscribeSnapshot(); // Limpa o listener do documento do usuário
             } else {
-                // Usuário deslogado
                 setUser(null);
                 setLoading(false);
             }
         });
 
-        return () => unsubscribeAuth(); // Limpa o listener de autenticação
+        // Função de limpeza final que é chamada quando o componente é desmontado
+        return () => {
+            unsubscribeAuth();
+            unsubscribeUserSnapshot();
+            unsubscribeRoleSnapshot();
+        };
     }, []);
-
-    // --- Funções de Autenticação ---
 
     const login = async (email, password) => {
         try {
@@ -86,81 +95,51 @@ export const AuthProvider = ({ children }) => {
         }
     };
 
-    const logout = async () => {
-        await signOut(auth);
-    };
-
-    const updateUserPassword = async (currentPassword, newPassword) => {
-        const currentUser = auth.currentUser;
-        if (!currentUser) return 'auth/no-user';
-
-        try {
-            const credential = EmailAuthProvider.credential(currentUser.email, currentPassword);
-            await reauthenticateWithCredential(currentUser, credential);
-            await updatePassword(currentUser, newPassword);
-            return true;
-        } catch (error) {
-            return error.code;
-        }
-    };
+    const logout = async () => await signOut(auth);
     
-    // --- Funções de Gerenciamento de Usuários (Firestore) ---
-
-    const addUser = async (userData) => {
-        try {
-            // 1. Cria o usuário no serviço de Autenticação
-            const cred = await createUserWithEmailAndPassword(auth, userData.email, userData.password);
-            
-            // 2. Salva os dados adicionais no Firestore
-            const { password, ...dataToSave } = userData; // Remove a senha antes de salvar no DB
-            await setDoc(doc(db, "users", cred.user.uid), dataToSave);
-            
-            return { success: true };
-        } catch (error) {
-            return { success: false, code: error.code };
-        }
-    };
-
     const updateUserProfile = async (uid, data) => {
         try {
             const userDocRef = doc(db, "users", uid);
             await updateDoc(userDocRef, data);
             return true;
         } catch (error) {
-            console.error("Erro ao atualizar perfil:", error);
+            console.error("Erro ao atualizar perfil do usuário:", error);
             return false;
+        }
+    };
+
+    const createUser = async (userData) => {
+        try {
+            const createUserFunc = httpsCallable(functions, 'createUser');
+            const result = await createUserFunc(userData);
+            return { success: true, data: result.data };
+        } catch (error) {
+            return { success: false, code: error.code, message: error.message };
         }
     };
 
     const deleteUser = async (userId) => {
-        // ATENÇÃO: A exclusão do usuário do Firebase Authentication por segurança
-        // deve ser feita por uma Cloud Function no backend.
-        // Este método deleta apenas os dados do Firestore.
         try {
-            await deleteDoc(doc(db, "users", userId));
+            const deleteUserFunc = httpsCallable(functions, 'deleteUser');
+            await deleteUserFunc({ uid: userId });
             return true;
         } catch (error) {
-            console.error("Erro ao deletar documento do usuário:", error);
+            console.error("Erro ao deletar usuário:", error);
             return false;
         }
     };
 
-    // Objeto de valor exposto pelo Contexto
     const value = { 
         user, 
         loading, 
         login, 
         logout, 
-        addUser, 
-        deleteUser, 
-        updateUserProfile, 
-        updateUserPassword 
+        createUser,
+        deleteUser,
+        updateUserProfile,
     };
 
-    return <AuthContext.Provider value={value}>{!loading && children}</AuthContext.Provider>;
+    return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
-/**
- * Hook customizado para acessar facilmente o contexto de autenticação.
- */
 export const useAuth = () => useContext(AuthContext);

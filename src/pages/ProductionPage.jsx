@@ -42,7 +42,6 @@ const ProductionPage = ({ onNavigate }) => {
 
         const sortedMonths = Array.from(allMonths).sort().reverse();
 
-        // Garante que o mês atual (mesmo que vazio) apareça na lista
         if (!allMonths.has(selectedMonth) && !sortedMonths.includes(selectedMonth)) {
             sortedMonths.unshift(selectedMonth);
         }
@@ -87,10 +86,16 @@ const ProductionPage = ({ onNavigate }) => {
 
     const handleDelete = async (prod) => {
         try {
-            await confirm({ title: `Excluir produção de ${prod.clientName}?`, description: "Esta ação não pode ser desfeita." });
+            await confirm({ 
+                title: `Excluir produção de ${prod.clientName}?`, 
+                description: "Esta ação não pode ser desfeita.",
+                size: 'sm' 
+            });
             await deleteProduction(prod.id, prod.clientName);
             toast({ title: "Excluído!", description: "A entrada de produção foi removida." });
-        } catch (e) { /* Ação cancelada */ }
+        } catch (e) {
+            console.log("Ação de exclusão cancelada.");
+        }
     };
 
     return (

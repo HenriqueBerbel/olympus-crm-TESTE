@@ -1,0 +1,112 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // --- FUNÇÕES HELPER ---
+    function getUserData(userId) {
+      return get(/databases/$(database)/documents/users/$(userId)).data;
+    }
+
+    function getRoleData(userId) {
+      let roleId = getUserData(userId).roleId;
+      return get(/databases/$(database)/documents/roles/$(roleId)).data;
+    }
+
+    function isCallerAdmin() {
+      let roleId = getUserData(request.auth.uid).roleId;
+      return roleId == 'superadmin' || roleId == 'ceo';
+    }
+
+    function getPermissionLevel(module, action) {
+      let userData = getUserData(request.auth.uid);
+      let roleData = getRoleData(request.auth.uid);
+      let userOverride = userData.permissionsOverrides[module][action];
+      let rolePermission = roleData.permissions[module][action];
+
+      return (roleData.name == "SuperAdmin" || roleData.name == "CEO")
+        ? ((action == 'view' || action == 'edit' || action == 'delete') ? 'all' : true)
+        : (userOverride != null ? userOverride : rolePermission);
+    }
+
+    function hasAccess(module, action, resource) {
+      let permission = getPermissionLevel(module, action);
+      let uid = request.auth.uid;
+
+      return (permission == true || permission == false)
+        ? permission
+        : (
+            (permission == 'all') ||
+            (permission == 'own' && (
+              (resource.data.ownerId == uid) ||
+              (action == 'edit' && uid in resource.data.accessControl.editors) ||
+              (action == 'view' && (uid in resource.data.accessControl.editors || uid in resource.data.accessControl.viewers))
+            ))
+          );
+    }
+
+    // --- REGRAS DAS COLEÇÕES ---
+    match /users/{userId} {
+      allow read, update: if request.auth.uid == userId || isCallerAdmin();
+      allow create, delete: if isCallerAdmin();
+    }
+
+    match /roles/{roleId} {
+      allow read: if request.auth.uid != null;
+      allow write: if getPermissionLevel('corporate', 'managePermissions') == true;
+    }
+
+    match /leads/{docId} {
+      allow read: if hasAccess('leads', 'view', resource);
+      allow create: if getPermissionLevel('leads', 'create') == true;
+      allow update: if hasAccess('leads', 'edit', resource);
+      allow delete: if hasAccess('leads', 'delete', resource);
+    }
+
+    match /clients/{docId} {
+      allow read: if hasAccess('clients', 'view', resource);
+      allow create: if getPermissionLevel('clients', 'create') == true;
+      allow update: if hasAccess('clients', 'edit', resource);
+      allow delete: if hasAccess('clients', 'delete', resource);
+    }
+
+    match /tasks/{docId} {
+      allow read: if hasAccess('tasks', 'view', resource);
+      allow create: if getPermissionLevel('tasks', 'create') == true;
+      allow update: if hasAccess('tasks', 'edit', resource);
+      allow delete: if hasAccess('tasks', 'delete', resource);
+    }
+
+    match /commissions/{docId} {
+      allow read: if hasAccess('commissions', 'view', resource);
+      allow create: if getPermissionLevel('commissions', 'create') == true;
+      allow update: if hasAccess('commissions', 'edit', resource);
+      allow delete: if hasAccess('commissions', 'delete', resource);
+    }
+
+    match /productions/{docId} {
+      allow read: if hasAccess('productions', 'view', resource);
+      allow create: if getPermissionLevel('productions', 'create') == true;
+      allow update: if hasAccess('productions', 'edit', resource);
+      allow delete: if hasAccess('productions', 'delete', resource);
+    }
+
+    match /timeline/{docId} {
+      allow read: if getPermissionLevel('timeline', 'view') != 'none';
+      allow create: if request.auth.uid != null;
+    }
+
+    match /kanban_columns/{docId} { allow read, write: if isCallerAdmin(); }
+    match /company_profile/{docId} { allow read, write: if isCallerAdmin(); }
+    match /partners/{docId} { allow read, write: if getPermissionLevel('corporate', 'managePartners') == true; }
+    match /operators/{docId} { allow read, write: if getPermissionLevel('corporate', 'manageOperators') == true; }
+
+    match /completed_events/{docId} { allow read, write: if request.auth.uid != null; }
+    match /notifications/{docId} { allow read, write: if request.auth.uid != null; }
+
+    // Regra de negação padrão
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

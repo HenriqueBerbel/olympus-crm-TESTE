@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "olympus-crm-teste"
-  }
+    "default": "olympus-crm-teste",
+    "prod": "olympus-crm-prod"
+  },
+  "targets": {},
+  "etags": {}
 }

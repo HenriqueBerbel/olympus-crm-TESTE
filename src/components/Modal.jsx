@@ -5,10 +5,17 @@ import Button from './Button';
 import { XIcon } from './Icons';
 import { cn } from '../utils';
 
-const Modal = ({ isOpen, onClose, title, children, size = '3xl' }) => {
+// ALTERAÇÃO: O tamanho padrão agora é 'lg', um valor mais versátil.
+const Modal = ({ isOpen, onClose, title, children, size = 'lg' }) => {
     if (!isOpen) return null;
 
+    // ALTERAÇÃO: Adicionados todos os tamanhos comuns para tornar o modal mais flexível.
     const sizeClasses = {
+        sm: 'max-w-sm',
+        md: 'max-w-md',
+        lg: 'max-w-lg',
+        xl: 'max-w-xl',
+        '2xl': 'max-w-2xl',
         '3xl': 'max-w-3xl',
         '5xl': 'max-w-5xl',
         '6xl': 'max-w-6xl'
@@ -20,7 +27,10 @@ const Modal = ({ isOpen, onClose, title, children, size = '3xl' }) => {
             onClick={onClose}
         >
             <GlassPanel
-                className={cn("relative w-full animate-slide-up flex flex-col", sizeClasses[size])}
+                className={cn(
+                    "relative w-full animate-slide-up flex flex-col",
+                    sizeClasses[size] // Esta linha agora funcionará para 'md' e outros tamanhos.
+                )}
                 onClick={(e) => e.stopPropagation()}
             >
                 <div className="flex-shrink-0 flex justify-between items-center p-6 pb-4 border-b border-gray-200 dark:border-white/10">

@@ -28,7 +28,10 @@ import { PlusCircleIcon, PencilIcon, Trash2Icon } from '../components/Icons';
 const ClientFormPage = ({ client, onCancel, isConversion = false, leadData = null, initialTab = 'general' }) => {
     const [formData, setFormData] = useState(null);
     const [errors, setErrors] = useState({});
+    
+    // [CORRIGIDO] O estado da aba ativa agora usa a prop 'initialTab' como valor inicial.
     const [activeTab, setActiveTab] = useState(initialTab);
+    
     const [isSaving, setIsSaving] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
     
@@ -73,6 +76,11 @@ const ClientFormPage = ({ client, onCancel, isConversion = false, leadData = nul
         setFormData(initialData);
         setErrors({});
     }, [client, isConversion, leadData, user]);
+
+    // [NOVO] Este useEffect garante que a aba mude se a prop initialTab for alterada dinamicamente.
+    useEffect(() => {
+        setActiveTab(initialTab);
+    }, [initialTab]);
 
     const handleChange = useCallback((e) => {
         const { name, value } = e.target;
@@ -131,7 +139,11 @@ const ClientFormPage = ({ client, onCancel, isConversion = false, leadData = nul
         try {
             await saveClient();
             toast({ title: "Sucesso!", description: "Cliente salvo com sucesso." });
-            navigate('/clients');
+            if (onCancel) {
+                onCancel(); // Usa a função onCancel se ela existir (para fechar o modo edição)
+            } else {
+                navigate('/clients'); // Fallback para navegação
+            }
         } catch (error) {
             toast({ title: "Erro ao Salvar", description: error.message, variant: "destructive" });
         } finally {
@@ -192,9 +204,12 @@ const ClientFormPage = ({ client, onCancel, isConversion = false, leadData = nul
         setEditingContract(null);
     };
     
-    const handleDeleteContract = (contractId) => {
-        const newContracts = (formData.contracts || []).filter(c => c.id !== contractId);
-        setFormData(p => ({...p, contracts: newContracts}));
+    const handleDeleteContract = async (contractId) => {
+        try {
+            await confirm({ title: "Excluir este contrato?", description: "Esta ação não pode ser desfeita." });
+            const newContracts = (formData.contracts || []).filter(c => c.id !== contractId);
+            setFormData(p => ({...p, contracts: newContracts}));
+        } catch (e) { /* Ação cancelada */ }
     };
 
     if (!formData) { return <div className="p-8 text-center">Carregando formulário...</div>; }

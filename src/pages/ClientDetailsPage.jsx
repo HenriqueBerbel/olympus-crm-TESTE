@@ -25,9 +25,7 @@ import CortexTab from '../components/clients/CortexTab';
 import ContractsTab from '../components/clients/ContractsTab';
 import DocumentsTab from '../components/clients/DocumentsTab';
 
-// ========================================================================
-//          *** CORREÇÃO APLICADA AQUI NO OVERVIEWTAB ***
-// ========================================================================
+
 const OverviewTab = ({ client }) => {
     const { general, address } = client || {};
     const clientType = general?.clientType;
@@ -133,7 +131,10 @@ const ClientDetailsPage = ({ client, onBack, onEdit }) => {
                     </TabsList>
                     
                     <TabsContent value="general"><OverviewTab client={client} /></TabsContent>
-                    <TabsContent value="contracts"><ContractsTab client={client} /></TabsContent>
+                    
+                    {/* [CORRIGIDO] A prop 'onEdit' foi passada para o ContractsTab */}
+                    <TabsContent value="contracts"><ContractsTab client={client} onEdit={onEdit} /></TabsContent>
+                    
                     <TabsContent value="beneficiaries"><BeneficiariesTab client={client} /></TabsContent>
                     <TabsContent value="documents"><DocumentsTab client={client} /></TabsContent>
                     <TabsContent value="history"><HistoryTab client={client} /></TabsContent>

@@ -2,17 +2,17 @@ import React from 'react';
 import { useData } from '../../contexts/DataContext';
 import { formatDate } from '../../utils';
 
-// Componentes (com importações corrigidas)
+// Componentes
 import GlassPanel from '../GlassPanel';
 import Badge from '../Badge';
 import EmptyState from '../EmptyState';
 import Button from '../Button';
-import DetailItem from '../DetailItem'; // CORREÇÃO: Importado como default (sem chaves)
+import DetailItem from '../DetailItem';
 
 // Ícones
-import { ChevronLeftIcon, PlusCircleIcon } from '../Icons';
+import { PlusCircleIcon } from '../Icons';
 
-// Subcomponente interno para evitar múltiplos exports
+// Subcomponente para exibir detalhes do contrato
 const ContractDetails = ({ contract, clientType }) => {
     const { users } = useData();
     const boletoOwner = users.find(u => u.id === contract.boletoResponsibleId);
@@ -67,24 +67,33 @@ const ContractDetails = ({ contract, clientType }) => {
     );
 };
 
-// Componente principal da página
-const ContractsTab = ({ client, onBack, onEdit }) => {
+// Componente principal da aba de Contratos
+const ContractsTab = ({ client, onEdit }) => {
     const activeContract = (client.contracts || []).find(c => c.status === 'ativo');
     const inactiveContracts = (client.contracts || []).filter(c => c.status !== 'ativo');
     
+    // [CORRIGIDO] Se não houver contrato ativo, exibe o EmptyState com o botão de ação.
+    if (!activeContract) {
+        return (
+            <EmptyState
+                title="Nenhum Contrato Ativo"
+                message="Não há um contrato marcado como ativo para este cliente."
+                actionText="Gerenciar Contratos"
+                onAction={() => onEdit(client, { initialTab: 'contracts' })}
+            />
+        );
+    }
+    
+    // Se houver contrato ativo, exibe os detalhes e o histórico.
     return (
         <div className="space-y-6">
-            {activeContract ? (
-                <GlassPanel className="p-6 border-l-4 border-green-500">
-                    <div className="flex justify-between items-center mb-4">
-                        <h3 className="text-xl font-semibold text-gray-900 dark:text-white">Contrato Ativo</h3>
-                        <Badge variant="success">ATIVO</Badge>
-                    </div>
-                    <ContractDetails contract={activeContract} clientType={client.general?.clientType} />
-                </GlassPanel>
-            ) : (
-                <EmptyState title="Nenhum Contrato Ativo" message="Não há um contrato marcado como ativo para este cliente." />
-            )}
+            <GlassPanel className="p-6 border-l-4 border-green-500">
+                <div className="flex justify-between items-center mb-4">
+                    <h3 className="text-xl font-semibold text-gray-900 dark:text-white">Contrato Ativo</h3>
+                    <Badge variant="success">ATIVO</Badge>
+                </div>
+                <ContractDetails contract={activeContract} clientType={client.general?.clientType} />
+            </GlassPanel>
 
             {inactiveContracts.length > 0 && (
                 <GlassPanel className="p-6">
@@ -103,9 +112,10 @@ const ContractsTab = ({ client, onBack, onEdit }) => {
                 </GlassPanel>
             )}
             
-            <div className="flex justify-end gap-4">
-                <Button variant="outline" onClick={onBack}><ChevronLeftIcon className="h-4 w-4 mr-1" /> Voltar para Cliente</Button>
-                <Button onClick={() => onEdit(client, { initialTab: 'contracts' })}><PlusCircleIcon className="h-4 w-4 mr-2" /> Gerenciar Contratos</Button>
+            <div className="flex justify-end mt-4">
+                <Button onClick={() => onEdit(client, { initialTab: 'contracts' })}>
+                    <PlusCircleIcon className="h-4 w-4 mr-2" /> Gerenciar Contratos
+                </Button>
             </div>
         </div>
     );

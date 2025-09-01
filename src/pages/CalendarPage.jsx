@@ -177,7 +177,12 @@ function CalendarPage({ onNavigate }) {
                                                 <p className="font-semibold text-sm text-gray-900 dark:text-white">{event.title}</p>
                                                 <p className="text-xs text-gray-500">Responsável: {responsible?.name || 'Não definido'}</p>
                                             </div>
-                                            <Checkbox checked={false} onChange={(e) => toggleEventCompletion(event, e.target.checked)} title="Marcar como concluído" />
+                                            {/* [CORRIGIDO] Checkbox com estado e título dinâmicos */}
+                                            <Checkbox
+                                                checked={completedEventIds.has(event.id)}
+                                                onChange={(e) => toggleEventCompletion(event, e.target.checked)}
+                                                title={completedEventIds.has(event.id) ? "Marcar como pendente" : "Marcar como concluído"}
+                                            />
                                         </div>
                                         {event.type === 'boletoSend' && (
                                             <div className="flex gap-2 mt-2 pl-11">
@@ -198,7 +203,12 @@ function CalendarPage({ onNavigate }) {
                         <div className="space-y-2">
                             {completedEventsToday.map(event => (
                                 <div key={event.id} className="p-2 rounded-lg flex items-center gap-3 opacity-60">
-                                    <Checkbox checked={true} onChange={(e) => toggleEventCompletion(event, e.target.checked)} />
+                                    {/* [CORRIGIDO] Checkbox com estado e título dinâmicos */}
+                                    <Checkbox
+                                        checked={completedEventIds.has(event.id)}
+                                        onChange={(e) => toggleEventCompletion(event, e.target.checked)}
+                                        title={completedEventIds.has(event.id) ? "Marcar como pendente" : "Marcar como concluído"}
+                                    />
                                     <div className={cn("w-6 h-6 rounded-md flex-shrink-0 flex items-center justify-center text-white", event.color)}><event.icon className="w-4 h-4" /></div>
                                     <p className="text-sm font-medium text-gray-600 dark:text-gray-400 line-through truncate">{event.title}</p>
                                 </div>

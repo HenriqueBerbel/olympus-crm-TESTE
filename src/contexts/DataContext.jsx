@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { 
     collection, onSnapshot, addDoc, doc, updateDoc, setDoc,
-    deleteDoc, query, orderBy, where, serverTimestamp 
+    deleteDoc, query, orderBy, where, serverTimestamp, getDocs, writeBatch
 } from "firebase/firestore";
 import { db } from '../firebase/firebase.js';
 import { useAuth } from './AuthContext.jsx';
@@ -64,7 +64,6 @@ export const DataProvider = ({ children }) => {
             { name: 'partners', setter: setPartners }, { name: 'productions', setter: setProductions }
         ];
 
-        // [MELHORIA] Gerenciamento preciso do estado de carregamento
         let initialLoads = collectionsToFetch.length + 3;
         const onInitialLoadDone = () => {
             initialLoads--;
@@ -138,7 +137,29 @@ export const DataProvider = ({ children }) => {
         return events;
     }, [clients, tasks]);
 
-    // --- FUNÇÕES CRUD COMPLETAS ---
+    const toggleEventCompletion = useCallback(async (event, isCompleted) => {
+        if (!user) return false;
+        const completedEventsRef = collection(db, "completed_events");
+        try {
+            if (isCompleted) {
+                await addDoc(completedEventsRef, {
+                    eventId: event.id,
+                    userId: user.uid,
+                    completedAt: serverTimestamp(),
+                });
+            } else {
+                const q = query(completedEventsRef, where("eventId", "==", event.id), where("userId", "==", user.uid));
+                const snapshot = await getDocs(q);
+                const batch = writeBatch(db);
+                snapshot.forEach(doc => batch.delete(doc.ref));
+                await batch.commit();
+            }
+            return true;
+        } catch (error) {
+            console.error("Erro ao alterar status do evento:", error);
+            return false;
+        }
+    }, [user]);
 
     const updateRole = useCallback(async (roleId, dataToUpdate) => {
         if (!db) return false;
@@ -368,7 +389,8 @@ export const DataProvider = ({ children }) => {
         completedEvents, partners, productions,
         actionableEvents,
         logAction,
-        updateRole,
+        toggleEventCompletion,
+        updateRole, 
         addClient, updateClient, deleteClient,
         addLead, updateLead, deleteLead,
         addTask, updateTask, deleteTask,
@@ -382,7 +404,7 @@ export const DataProvider = ({ children }) => {
         loading, clients, leads, tasks, users, roles, timeline, operators, 
         commissions, companyProfile, leadColumns, taskColumns, 
         completedEvents, partners, productions,
-        actionableEvents, logAction, updateRole, 
+        actionableEvents, logAction, toggleEventCompletion, updateRole, 
         addClient, updateClient, deleteClient, addLead, updateLead, deleteLead,
         addTask, updateTask, deleteTask, addOperator, updateOperator, deleteOperator,
         addPartner, updatePartner, deletePartner, addCommission, addProduction, 

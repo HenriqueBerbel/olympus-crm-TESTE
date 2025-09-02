@@ -25,13 +25,10 @@ import DocumentsForm from '../components/forms/DocumentsForm';
 // Ícones
 import { PlusCircleIcon, PencilIcon, Trash2Icon } from '../components/Icons';
 
-const ClientFormPage = ({ client, onCancel, isConversion = false, leadData = null, initialTab = 'general' }) => {
+const ClientFormPage = ({ client, onCancel, onSaveSuccess, isConversion = false, leadData = null, initialTab = 'general' }) => {
     const [formData, setFormData] = useState(null);
     const [errors, setErrors] = useState({});
-    
-    // [CORRIGIDO] O estado da aba ativa agora usa a prop 'initialTab' como valor inicial.
-    const [activeTab, setActiveTab] = useState(initialTab);
-    
+    const [activeTab, setActiveTab] = useState(initialTab || 'general');
     const [isSaving, setIsSaving] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
     
@@ -69,6 +66,7 @@ const ClientFormPage = ({ client, onCancel, isConversion = false, leadData = nul
                 observations: leadData.notes ? [{ text: `Nota original do Lead: ${leadData.notes}`, authorId: leadData.ownerId || user.uid, authorName: 'Sistema', timestamp: new Date() }] : []
             };
         } else if (client) {
+            // Usa deep copy para evitar mutações indesejadas no estado original
             initialData = { ...defaultData, ...JSON.parse(JSON.stringify(client)) };
         } else {
             initialData = defaultData;
@@ -77,20 +75,21 @@ const ClientFormPage = ({ client, onCancel, isConversion = false, leadData = nul
         setErrors({});
     }, [client, isConversion, leadData, user]);
 
-    // [NOVO] Este useEffect garante que a aba mude se a prop initialTab for alterada dinamicamente.
+    // Garante que a aba mude se a prop initialTab for alterada dinamicamente
     useEffect(() => {
-        setActiveTab(initialTab);
+        if (initialTab) {
+            setActiveTab(initialTab);
+        }
     }, [initialTab]);
 
     const handleChange = useCallback((e) => {
         const { name, value } = e.target;
         const keys = name.split('.');
         setFormData(prev => {
-            const newState = { ...prev };
+            const newState = JSON.parse(JSON.stringify(prev)); // Deep copy para segurança
             let current = newState;
             keys.slice(0, -1).forEach(key => {
                 if (!current[key]) current[key] = {};
-                current[key] = { ...current[key] };
                 current = current[key];
             });
             current[keys[keys.length - 1]] = value;
@@ -127,6 +126,10 @@ const ClientFormPage = ({ client, onCancel, isConversion = false, leadData = nul
         }
     };
     
+    // ===================================================================================
+    // [AQUI ESTÁ A CORREÇÃO PRINCIPAL]
+    // Esta função agora controla a navegação APÓS o salvamento ser concluído com sucesso.
+    // ===================================================================================
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (!validateForm()) {
@@ -137,12 +140,19 @@ const ClientFormPage = ({ client, onCancel, isConversion = false, leadData = nul
         
         setIsSaving(true);
         try {
-            await saveClient();
+            const savedClient = await saveClient(); // Espera o salvamento ser concluído
             toast({ title: "Sucesso!", description: "Cliente salvo com sucesso." });
-            if (onCancel) {
-                onCancel(); // Usa a função onCancel se ela existir (para fechar o modo edição)
+
+            // Agora, o formulário decide para onde ir, evitando a condição de corrida.
+            if (isConversion && onSaveSuccess) {
+                // Se for uma conversão de lead, chama a função especial do Wrapper
+                onSaveSuccess(savedClient, leadData.id);
+            } else if (savedClient.id) {
+                // Se for uma edição ou criação normal, navega para a página de detalhes
+                navigate(`/clients/${savedClient.id}`);
             } else {
-                navigate('/clients'); // Fallback para navegação
+                // Fallback: se tudo mais falhar, volta para a lista
+                navigate('/clients');
             }
         } catch (error) {
             toast({ title: "Erro ao Salvar", description: error.message, variant: "destructive" });

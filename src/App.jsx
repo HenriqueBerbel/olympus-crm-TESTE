@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom';
+// [NOVO] Importe 'useLocation' para ler os dados passados na navegação
+import { Routes, Route, Navigate, useNavigate, useParams, useLocation } from 'react-router-dom';
 
-// Providers e Contexts
+// Providers e Contexts (Tudo igual)
 import { ThemeProvider } from './contexts/ThemeContext';
 import { NotificationProvider, useToast } from './contexts/NotificationContext';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -9,12 +10,10 @@ import { DataProvider, useData } from './contexts/DataContext';
 import { ConfirmProvider } from './contexts/ConfirmContext';
 import { PreferencesProvider, usePreferences } from './contexts/PreferencesContext';
 
-// Layout Components
+// ... (Resto dos seus imports de Layout e Páginas permanecem iguais)
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
 import ConfirmDialog from './components/ConfirmDialog';
-
-// Page Components
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import LeadsPage from './pages/LeadsPage';
@@ -29,50 +28,50 @@ import TimelinePage from './pages/TimelinePage';
 import GestaoCorporativaPage from './pages/GestaoCorporativaPage';
 import ProfilePage from './pages/ProfilePage';
 import ImportClientsPage from './pages/ImportClientsPage';
-
 import { cn } from './utils';
 
-// Componente "Wrapper" para buscar o cliente correto com base na URL
-// e passar para as páginas de Detalhes e Edição.
+
 function ClientWrapper({ mode }) {
-    const { clientId } = useParams(); // Pega o ID da URL (ex: /clients/XYZ)
+    const { clientId } = useParams();
     const { clients } = useData();
     const navigate = useNavigate();
     
-    // Encontra o cliente na lista de dados globais
+    // [NOVO] Hook para ler o estado da navegação
+    const location = useLocation();
+    
     const client = clients?.find(c => c.id === clientId);
 
-    // Lida com casos onde os dados ainda não carregaram ou o cliente não foi encontrado
     if (clients === undefined) return <div className="p-8 text-center">Carregando dados do cliente...</div>;
-    if (!client) return <div className="p-8 text-center">Cliente não encontrado.</div>;
+    if (!client && mode !== 'new') return <div className="p-8 text-center">Cliente não encontrado.</div>;
 
-    // Renderiza a página correta (Detalhes ou Edição) com os dados do cliente
     if (mode === 'details') {
         return <ClientDetailsPage 
             client={client} 
-            onEdit={() => navigate(`/clients/${clientId}/edit`)} 
+            // [CORREÇÃO 1] Agora onEdit passa a initialTab para a próxima rota usando 'state'
+            onEdit={(_client, options) => navigate(`/clients/${clientId}/edit`, { state: { initialTab: options?.initialTab } })} 
             onBack={() => navigate('/clients')} 
         />;
     }
     if (mode === 'edit') {
         return <ClientFormPage 
             client={client} 
-            onSave={() => navigate(`/clients/${clientId}`)} 
-            onCancel={() => navigate(`/clients/${clientId}`)} 
+            // [CORREÇÃO 2] O formulário agora controla o sucesso do salvamento. O Pai só oferece a opção de cancelar.
+            onCancel={() => navigate(`/clients/${clientId}`)}
+            // [CORREÇÃO 1] O formulário recebe a initialTab que veio pelo 'state' da navegação
+            initialTab={location.state?.initialTab}
         />;
     }
     return null;
 }
 
-// Wrapper para lidar com a conversão de Lead para Cliente
 function LeadConversionWrapper() {
+    // ... (Este componente permanece o mesmo)
     const { leadId } = useParams();
     const { leads, deleteLead } = useData();
     const navigate = useNavigate();
     const { toast } = useToast();
     const lead = leads?.find(l => l.id === leadId);
 
-    // Função que é chamada após o formulário ser salvo
     const handleSaveConversion = async (savedClient, sourceLeadId) => {
         if (lead) {
             await deleteLead(sourceLeadId, lead.name);
@@ -87,13 +86,14 @@ function LeadConversionWrapper() {
     return <ClientFormPage 
         isConversion={true} 
         leadData={lead} 
-        onSave={handleSaveConversion} 
+        onSaveSuccess={handleSaveConversion} // Renomeado para clareza
         onCancel={() => navigate('/leads')} 
     />;
 }
 
 
 function MainApp() {
+    // ... (Este componente permanece o mesmo)
     const [isSidebarOpen, setSidebarOpen] = useState(false);
     const { preferences } = usePreferences();
 
@@ -107,10 +107,7 @@ function MainApp() {
                 />
                 <main className={cn("relative", preferences.uppercaseMode && "uppercase")}>
                     <Routes>
-                        {/* Rota Padrão: redireciona para o dashboard */}
                         <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                        
-                        {/* Definição de cada página */}
                         <Route path="/dashboard" element={<DashboardPage />} />
                         <Route path="/leads" element={<LeadsPage />} />
                         <Route path="/clients" element={<ClientsListPage />} />
@@ -122,14 +119,15 @@ function MainApp() {
                         <Route path="/corporate" element={<GestaoCorporativaPage />} />
                         <Route path="/profile" element={<ProfilePage />} />
 
-                        {/* Rotas Especiais para Clientes e Leads */}
-                        <Route path="/clients/new" element={<ClientFormPage />} />
-                        <Route path="/clients/import" element={<ImportClientsPage />} />
+                        {/* [NOVO] Adicionado onCancel para a página de importação */}
+                        <Route path="/clients/import" element={<ImportClientsPage onBack={() => navigate('/clients')} />} />
+
+                        {/* [ALTERAÇÃO] A rota /new agora também usa o ClientWrapper */}
+                        <Route path="/clients/new" element={<ClientFormPage onCancel={() => navigate('/clients')} />} />
                         <Route path="/clients/:clientId" element={<ClientWrapper mode="details" />} />
                         <Route path="/clients/:clientId/edit" element={<ClientWrapper mode="edit" />} />
                         <Route path="/leads/:leadId/convert" element={<LeadConversionWrapper />} />
                         
-                        {/* Rota para quando o link não existe */}
                         <Route path="*" element={<div className="p-8 text-center"><h1>404</h1><p>Página não encontrada</p></div>} />
                     </Routes>
                 </main>
@@ -140,6 +138,7 @@ function MainApp() {
     );
 }
 
+// ... (MainLoader e App permanecem os mesmos)
 function MainLoader() {
     const { user, loading } = useAuth();
     if (loading) {

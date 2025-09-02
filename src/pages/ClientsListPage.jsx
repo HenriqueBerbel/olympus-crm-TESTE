@@ -39,7 +39,6 @@ const ClientsListPage = () => {
     const [isExporting, setIsExporting] = useState(false);
     const ITEMS_PER_PAGE = 20;
     
-    // [MODIFICADO] Lógica de carregamento agora entende a nova estrutura de permissões { scope: '...' }
     const loadClients = useCallback(async (loadMore = false) => {
         const viewPermission = permissions.clients?.view;
         const scope = viewPermission?.scope || 'nenhum';
@@ -55,7 +54,9 @@ const ClientsListPage = () => {
         setLoading(true);
 
         try {
-            let constraints = [orderBy("general.companyName", "asc")];
+            // [CORREÇÃO APLICADA]
+            // A ordenação agora é feita pelo campo 'sortName', que é consistente para todos os clientes.
+            let constraints = [orderBy("sortName", "asc")];
 
             // Constrói a query com base no escopo da permissão do usuário
             switch (scope) {
@@ -156,7 +157,9 @@ const ClientsListPage = () => {
                 return;
             }
 
-            let constraints = [orderBy("general.companyName", "asc")];
+            // [CORREÇÃO APLICADA]
+            // A ordenação para exportação também foi atualizada para 'sortName'.
+            let constraints = [orderBy("sortName", "asc")];
             
             switch (scope) {
                 case 'próprio':

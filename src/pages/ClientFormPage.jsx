@@ -36,6 +36,9 @@ const ClientFormPage = ({ client, onCancel, onSaveSuccess, isConversion = false,
     const [isContractModalOpen, setContractModalOpen] = useState(false);
     const [editingContract, setEditingContract] = useState(null);
 
+    // [NOVA LÓGICA] Estado para controlar o resultado da operação de salvamento
+    const [saveResult, setSaveResult] = useState({ status: 'idle', data: null, error: null });
+
     // Hooks
     const { addClient, updateClient } = useData();
     const { user } = useAuth();
@@ -66,7 +69,6 @@ const ClientFormPage = ({ client, onCancel, onSaveSuccess, isConversion = false,
                 observations: leadData.notes ? [{ text: `Nota original do Lead: ${leadData.notes}`, authorId: leadData.ownerId || user.uid, authorName: 'Sistema', timestamp: new Date() }] : []
             };
         } else if (client) {
-            // Usa deep copy para evitar mutações indesejadas no estado original
             initialData = { ...defaultData, ...JSON.parse(JSON.stringify(client)) };
         } else {
             initialData = defaultData;
@@ -75,18 +77,38 @@ const ClientFormPage = ({ client, onCancel, onSaveSuccess, isConversion = false,
         setErrors({});
     }, [client, isConversion, leadData, user]);
 
-    // Garante que a aba mude se a prop initialTab for alterada dinamicamente
     useEffect(() => {
         if (initialTab) {
             setActiveTab(initialTab);
         }
     }, [initialTab]);
 
+    // [NOVA LÓGICA] - Este useEffect agora é o ÚNICO responsável pela navegação.
+    // Ele só é ativado quando o estado 'saveResult' muda para 'success' ou 'error'.
+    useEffect(() => {
+        if (saveResult.status === 'success') {
+            const savedClient = saveResult.data;
+            toast({ title: "Sucesso!", description: "Cliente salvo com sucesso." });
+
+            // A lógica de navegação foi movida para cá
+            if (isConversion && onSaveSuccess) {
+                onSaveSuccess(savedClient, leadData.id);
+            } else if (savedClient?.id) {
+                navigate(`/clients/${savedClient.id}`);
+            } else {
+                navigate('/clients');
+            }
+        } else if (saveResult.status === 'error') {
+            toast({ title: "Erro ao Salvar", description: saveResult.error.message, variant: "destructive" });
+        }
+    }, [saveResult, navigate, onSaveSuccess, isConversion, leadData, toast]);
+
+
     const handleChange = useCallback((e) => {
         const { name, value } = e.target;
         const keys = name.split('.');
         setFormData(prev => {
-            const newState = JSON.parse(JSON.stringify(prev)); // Deep copy para segurança
+            const newState = JSON.parse(JSON.stringify(prev));
             let current = newState;
             keys.slice(0, -1).forEach(key => {
                 if (!current[key]) current[key] = {};
@@ -115,21 +137,24 @@ const ClientFormPage = ({ client, onCancel, onSaveSuccess, isConversion = false,
 
     const saveClient = async () => {
         const { id, ...dataToSave } = formData;
+        dataToSave.sortName = (dataToSave.general.companyName || dataToSave.general.holderName || '').toLowerCase();
+        if (dataToSave.general.clientType === 'Pessoa Física' && !dataToSave.general.companyName) {
+            dataToSave.general.companyName = dataToSave.general.holderName;
+        }
+
         if (id) {
             const success = await updateClient(id, dataToSave);
             if (!success) throw new Error("Ocorreu um erro ao atualizar o cliente.");
             return { id, ...dataToSave };
         } else {
             const newClient = await addClient(dataToSave);
-            if (!newClient) throw new Error("Ocorreu um erro ao criar o cliente. Verifique suas permissões.");
+            if (!newClient) throw new Error("Ocorreu um erro ao criar o cliente.");
             return newClient;
         }
     };
     
-    // ===================================================================================
-    // [AQUI ESTÁ A CORREÇÃO PRINCIPAL]
-    // Esta função agora controla a navegação APÓS o salvamento ser concluído com sucesso.
-    // ===================================================================================
+    // [LÓGICA REESTRUTURADA] - O handleSubmit agora apenas inicia o processo de salvamento
+    // e atualiza o estado 'saveResult'. Ele não navega mais diretamente.
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (!validateForm()) {
@@ -139,23 +164,12 @@ const ClientFormPage = ({ client, onCancel, onSaveSuccess, isConversion = false,
         }
         
         setIsSaving(true);
+        setSaveResult({ status: 'pending', data: null, error: null });
         try {
-            const savedClient = await saveClient(); // Espera o salvamento ser concluído
-            toast({ title: "Sucesso!", description: "Cliente salvo com sucesso." });
-
-            // Agora, o formulário decide para onde ir, evitando a condição de corrida.
-            if (isConversion && onSaveSuccess) {
-                // Se for uma conversão de lead, chama a função especial do Wrapper
-                onSaveSuccess(savedClient, leadData.id);
-            } else if (savedClient.id) {
-                // Se for uma edição ou criação normal, navega para a página de detalhes
-                navigate(`/clients/${savedClient.id}`);
-            } else {
-                // Fallback: se tudo mais falhar, volta para a lista
-                navigate('/clients');
-            }
+            const savedClient = await saveClient();
+            setSaveResult({ status: 'success', data: savedClient, error: null });
         } catch (error) {
-            toast({ title: "Erro ao Salvar", description: error.message, variant: "destructive" });
+            setSaveResult({ status: 'error', data: null, error: error });
         } finally {
             setIsSaving(false);
         }

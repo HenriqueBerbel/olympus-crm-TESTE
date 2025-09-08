@@ -1,14 +1,28 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, memo } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import { useData } from '../contexts/DataContext';
 import { useToast } from '../contexts/NotificationContext';
 import GlassPanel from '../components/GlassPanel';
 import Button from '../components/Button';
 import Checkbox from '../components/Checkbox';
-import { ChevronLeftIcon, ChevronRightIcon, CalendarIcon, FileTextIcon, AlertTriangleIcon, AwardIcon, CheckSquareIcon } from '../components/Icons';
-import { cn, formatDate } from '../utils';
+import { ChevronLeftIcon, ChevronRightIcon, CalendarIcon, WhatsAppIcon } from '../components/Icons';
+import { cn } from '../utils';
 
-const MiniCalendarPopover = ({ isOpen, onClose, onSelectDate, targetElement }) => {
+// --- SUBCOMPONENTE: SKELETON LOADER ---
+const CalendarSkeleton = memo(() => (
+    <div className="p-4 sm:p-6 lg:p-8 h-full flex flex-col animate-pulse">
+        <div className="h-9 w-64 bg-gray-300 dark:bg-gray-700 rounded-md mb-6"></div>
+        <div className="flex-grow grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-0">
+            <div className="p-6 lg:col-span-2 bg-gray-200 dark:bg-gray-800/50 rounded-2xl"></div>
+            <div className="p-6 bg-gray-200 dark:bg-gray-800/50 rounded-2xl"></div>
+        </div>
+    </div>
+));
+CalendarSkeleton.displayName = 'CalendarSkeleton';
+
+// --- SUBCOMPONENTE: POPOVER DE CALENDÁRIO (COMPLETO) ---
+const MiniCalendarPopover = memo(({ isOpen, onClose, onSelectDate, targetElement }) => {
     const [currentDate, setCurrentDate] = useState(new Date());
     const popoverRef = useRef(null);
 
@@ -28,7 +42,7 @@ const MiniCalendarPopover = ({ isOpen, onClose, onSelectDate, targetElement }) =
 
     if (!isOpen || !targetElement) return null;
 
-    const popoverWidth = 288; // w-72
+    const popoverWidth = 288;
     const popoverRect = targetElement.getBoundingClientRect();
     
     const leftPosition = popoverRect.right + window.scrollX - popoverWidth;
@@ -83,34 +97,112 @@ const MiniCalendarPopover = ({ isOpen, onClose, onSelectDate, targetElement }) =
         </div>,
         document.body
     );
-};
+});
+MiniCalendarPopover.displayName = 'MiniCalendarPopover';
 
-function CalendarPage({ onNavigate }) {
-    const { users, completedEvents, toggleEventCompletion, updateClient, actionableEvents } = useData();
+// --- SUBCOMPONENTE: AGENDA DO DIA ---
+const DayAgenda = memo(({ selectedDate, events, completedEventIds, users, onToggleCompletion, onPostpone }) => {
+    const navigate = useNavigate();
+
+    const getWhatsAppLink = (client) => {
+        const phone = client?.general?.contactPhone || client?.general?.phone;
+        if (!phone) return null;
+        const cleanPhone = `55${phone.replace(/\D/g, '')}`;
+        return `https://wa.me/${cleanPhone}`;
+    };
+
+    if (!events || events.length === 0) {
+        return (
+            <div className="text-center text-gray-500 pt-16 flex flex-col items-center animate-fade-in">
+                <CalendarIcon className="h-12 w-12 mx-auto text-gray-400 dark:text-gray-600" />
+                <h4 className="font-semibold mt-4">Nenhum evento para este dia.</h4>
+                <p className="text-sm">Relaxe ou planeje o futuro!</p>
+            </div>
+        );
+    }
+    
+    const pendingEvents = events.filter(e => !completedEventIds.has(e.id));
+    const completedEventsToday = events.filter(e => completedEventIds.has(e.id));
+
+    return (
+        <div className="space-y-4 animate-fade-in">
+             {pendingEvents.length > 0 && (
+                <div>
+                    <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-2">Pendentes</h4>
+                    <div className="space-y-3">
+                        {pendingEvents.map(event => {
+                            const responsible = users.find(u => u.id === event.data?.contract?.boletoResponsibleId || u.id === event.data?.task?.assignedTo);
+                            const whatsAppLink = getWhatsAppLink(event.data.client);
+                            return (
+                                <GlassPanel key={event.id} className="p-3 transition-all duration-300 hover:border-cyan-500/30">
+                                    <div className="flex items-start gap-3">
+                                        <div className={cn("w-8 h-8 mt-1 rounded-lg flex-shrink-0 flex items-center justify-center text-white", event.color)}><event.icon className="w-5 h-5" /></div>
+                                        <div className="flex-grow">
+                                            <p className="font-semibold text-sm text-gray-900 dark:text-white">{event.title}</p>
+                                            <p className="text-xs text-gray-500">Responsável: {responsible?.name || 'Não definido'}</p>
+                                        </div>
+                                        <Checkbox checked={completedEventIds.has(event.id)} onChange={(e) => onToggleCompletion(event, e.target.checked)} title="Marcar como concluído"/>
+                                    </div>
+                                    {event.type === 'boletoSend' && (
+                                        <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-200 dark:border-white/10 ml-11">
+                                            <Button size="sm" variant="outline" onClick={() => navigate(`/clients/${event.data.client.id}`)}>Ver Cliente</Button>
+                                            <Button size="sm" as="a" href={whatsAppLink} target="_blank" rel="noopener noreferrer" disabled={!whatsAppLink} className="bg-green-500 hover:bg-green-600 text-white disabled:bg-gray-300 dark:disabled:bg-gray-700">
+                                                <WhatsAppIcon className="w-4 h-4 mr-1.5"/> WhatsApp
+                                            </Button>
+                                            <Button size="sm" variant="ghost" onClick={(e) => onPostpone(event, e.currentTarget)}>Adiar</Button>
+                                        </div>
+                                    )}
+                                </GlassPanel>
+                            )
+                        })}
+                    </div>
+                </div>
+            )}
+            {completedEventsToday.length > 0 && (
+                 <div>
+                    <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-2 mt-6">Concluídos</h4>
+                    <div className="space-y-2">
+                        {completedEventsToday.map(event => (
+                            <div key={event.id} className="p-2 rounded-lg flex items-center gap-3 opacity-60">
+                                <Checkbox checked={completedEventIds.has(event.id)} onChange={(e) => onToggleCompletion(event, e.target.checked)} title="Marcar como pendente"/>
+                                <div className={cn("w-6 h-6 rounded-md flex-shrink-0 flex items-center justify-center text-white", event.color)}><event.icon className="w-4 h-4" /></div>
+                                <p className="text-sm font-medium text-gray-600 dark:text-gray-400 line-through truncate">{event.title}</p>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+});
+DayAgenda.displayName = 'DayAgenda';
+
+// --- COMPONENTE PRINCIPAL ---
+function CalendarPage() {
+    const { users, completedEvents, toggleEventCompletion, updateClient, actionableEvents, loading } = useData();
     const { toast } = useToast();
+    
     const [currentDate, setCurrentDate] = useState(new Date());
     const [selectedDate, setSelectedDate] = useState(new Date());
     const [popoverState, setPopoverState] = useState({ isOpen: false, event: null, target: null });
 
-    const allEvents = actionableEvents;
-
     const completedEventIds = useMemo(() => new Set((completedEvents || []).map(e => e.eventId)), [completedEvents]);
-
     const eventsByDay = useMemo(() => {
         const eventsMap = {};
-        if (allEvents) {
-            allEvents.forEach(event => {
-                const dayKey = event.date.toISOString().split('T')[0];
-                if (!eventsMap[dayKey]) eventsMap[dayKey] = [];
-                eventsMap[dayKey].push(event);
-            });
-        }
+        (actionableEvents || []).forEach(event => {
+            const dayKey = event.date.toISOString().split('T')[0];
+            if (!eventsMap[dayKey]) eventsMap[dayKey] = [];
+            eventsMap[dayKey].push(event);
+        });
         return eventsMap;
-    }, [allEvents]);
+    }, [actionableEvents]);
 
-    const firstDayOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
-    const daysInMonth = Array.from({ length: new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate() }, (_, i) => new Date(currentDate.getFullYear(), currentDate.getMonth(), i + 1));
-    const startingDay = firstDayOfMonth.getDay();
+    const { daysInMonth, startingDay } = useMemo(() => {
+        const firstDay = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+        const days = Array.from({ length: new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate() }, (_, i) => new Date(currentDate.getFullYear(), currentDate.getMonth(), i + 1));
+        return { daysInMonth: days, startingDay: firstDay.getDay() };
+    }, [currentDate]);
+
     const changeMonth = (offset) => setCurrentDate(prev => new Date(prev.getFullYear(), prev.getMonth() + offset, 1));
     const todayKey = new Date().toISOString().split('T')[0];
 
@@ -118,18 +210,19 @@ function CalendarPage({ onNavigate }) {
         const { event } = popoverState;
         if (!event) return;
 
-        const { client, originalDate } = event.data;
-        const newDateForEvent = newDate.toISOString().split('T')[0];
+        const { client } = event.data;
+        const originalEventDate = event.date.toISOString().split('T')[0];
+        const newEventDate = newDate.toISOString().split('T')[0];
         const exceptions = client.boletoExceptions || [];
-        const existingIndex = exceptions.findIndex(ex => ex.originalDate === originalDate);
+        const existingIndex = exceptions.findIndex(ex => ex.originalDate === originalEventDate);
 
         if (existingIndex > -1) {
-            exceptions[existingIndex].modifiedDate = newDateForEvent;
+            exceptions[existingIndex].modifiedDate = newEventDate;
         } else {
-            exceptions.push({ originalDate: originalDate, modifiedDate: newDateForEvent });
+            exceptions.push({ originalDate: originalEventDate, modifiedDate: newEventDate });
         }
 
-        const success = await updateClient(client.id, { ...client, boletoExceptions: exceptions });
+        const success = await updateClient(client.id, { boletoExceptions: exceptions });
         if (success) {
             toast({ title: 'Adiado!', description: `O envio do boleto foi adiado para ${newDate.toLocaleDateString('pt-BR')}.` });
         } else {
@@ -138,91 +231,16 @@ function CalendarPage({ onNavigate }) {
         setPopoverState({ isOpen: false, event: null, target: null });
     };
 
-    const DayAgenda = () => {
-        const dayKey = selectedDate.toISOString().split('T')[0];
-        const dayEvents = (eventsByDay[dayKey] || []).sort((a, b) => a.type.localeCompare(b.type));
-        const pendingEvents = dayEvents.filter(e => !completedEventIds.has(e.id));
-        const completedEventsToday = dayEvents.filter(e => completedEventIds.has(e.id));
-
-        const getWhatsAppLink = (client) => {
-            const phone = client?.general?.contactPhone || client?.general?.phone;
-            if (!phone) return null;
-            return `https://wa.me/55${phone.replace(/\D/g, '')}`;
-        }
-
-        if (dayEvents.length === 0) {
-            return (<div className="text-center text-gray-500 pt-16 flex flex-col items-center">
-                <CalendarIcon className="h-12 w-12 mx-auto text-gray-400 dark:text-gray-600" />
-                <h4 className="font-semibold mt-4">Nenhum evento para este dia.</h4>
-                <p className="text-sm">Relaxe ou planeje o futuro!</p>
-            </div>);
-        }
-
-        return (
-            <div className="space-y-4">
-                {pendingEvents.length > 0 && (
-                    <div>
-                        <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-2">Pendentes</h4>
-                        <div className="space-y-3">
-                            {pendingEvents.map(event => {
-                                const responsible = users.find(u => u.id === event.data?.contract?.boletoResponsibleId || u.id === event.data?.task?.assignedTo);
-                                const whatsAppLink = getWhatsAppLink(event.data.client);
-                                return (
-                                    <GlassPanel key={event.id} className="p-3">
-                                        <div className="flex items-start gap-3">
-                                            <div className={cn("w-8 h-8 mt-1 rounded-lg flex-shrink-0 flex items-center justify-center text-white", event.color)}>
-                                                <event.icon className="w-5 h-5" />
-                                            </div>
-                                            <div className="flex-grow">
-                                                <p className="font-semibold text-sm text-gray-900 dark:text-white">{event.title}</p>
-                                                <p className="text-xs text-gray-500">Responsável: {responsible?.name || 'Não definido'}</p>
-                                            </div>
-                                            {/* [CORRIGIDO] Checkbox com estado e título dinâmicos */}
-                                            <Checkbox
-                                                checked={completedEventIds.has(event.id)}
-                                                onChange={(e) => toggleEventCompletion(event, e.target.checked)}
-                                                title={completedEventIds.has(event.id) ? "Marcar como pendente" : "Marcar como concluído"}
-                                            />
-                                        </div>
-                                        {event.type === 'boletoSend' && (
-                                            <div className="flex gap-2 mt-2 pl-11">
-                                                <Button size="sm" variant="outline" onClick={() => onNavigate('client-details', event.data.client.id)}>Ver Cliente</Button>
-                                                {whatsAppLink && <Button size="sm" as="a" href={whatsAppLink} target="_blank" rel="noopener noreferrer">WhatsApp</Button>}
-                                                <Button size="sm" variant="ghost" onClick={(e) => setPopoverState({ isOpen: true, event: event, target: e.currentTarget })}>Adiar</Button>
-                                            </div>
-                                        )}
-                                    </GlassPanel>
-                                )
-                            })}
-                        </div>
-                    </div>
-                )}
-                {completedEventsToday.length > 0 && (
-                    <div>
-                        <h4 className="font-semibold text-gray-800 dark:text-gray-200 mb-2 mt-6">Concluídos</h4>
-                        <div className="space-y-2">
-                            {completedEventsToday.map(event => (
-                                <div key={event.id} className="p-2 rounded-lg flex items-center gap-3 opacity-60">
-                                    {/* [CORRIGIDO] Checkbox com estado e título dinâmicos */}
-                                    <Checkbox
-                                        checked={completedEventIds.has(event.id)}
-                                        onChange={(e) => toggleEventCompletion(event, e.target.checked)}
-                                        title={completedEventIds.has(event.id) ? "Marcar como pendente" : "Marcar como concluído"}
-                                    />
-                                    <div className={cn("w-6 h-6 rounded-md flex-shrink-0 flex items-center justify-center text-white", event.color)}><event.icon className="w-4 h-4" /></div>
-                                    <p className="text-sm font-medium text-gray-600 dark:text-gray-400 line-through truncate">{event.title}</p>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
-            </div>
-        )
+    if (loading) {
+        return <CalendarSkeleton />;
     }
 
     return (
         <div className="p-4 sm:p-6 lg:p-8 h-[calc(100vh-5rem)] flex flex-col">
-            <h2 className="text-3xl font-bold text-gray-900 dark:text-white mb-6 flex-shrink-0">Calendário Inteligente</h2>
+            <header className="flex-shrink-0 flex justify-between items-center mb-6">
+                <h2 className="text-3xl font-bold text-gray-900 dark:text-white">Calendário Inteligente</h2>
+                <Button onClick={() => setSelectedDate(new Date())}>Hoje</Button>
+            </header>
             <div className="flex-grow grid grid-cols-1 lg:grid-cols-3 gap-6 min-h-0">
                 <GlassPanel className="p-6 lg:col-span-2 flex flex-col">
                     <div className="flex justify-between items-center mb-4 flex-shrink-0">
@@ -232,30 +250,23 @@ function CalendarPage({ onNavigate }) {
                     </div>
                     <div className="grid grid-cols-7 gap-1 text-center text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">{['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(day => <div key={day} className="p-2">{day}</div>)}</div>
                     <div className="grid grid-cols-7 grid-rows-6 gap-1 flex-grow">
-                        {Array.from({ length: startingDay }).map((_, i) => <div key={`empty-${i}`} className="border border-transparent"></div>)}
+                        {Array.from({ length: startingDay }).map((_, i) => <div key={`empty-${i}`}></div>)}
                         {daysInMonth.map(day => {
                             const dayKey = day.toISOString().split('T')[0];
                             const dayEvents = (eventsByDay[dayKey] || []).filter(e => !completedEventIds.has(e.id));
                             const isSelected = day.toDateString() === selectedDate.toDateString();
                             const isToday = dayKey === todayKey;
-
-                            const eventTypeColors = {
-                                boletoSend: 'bg-cyan-500',
-                                task: 'bg-red-500',
-                                renewal: 'bg-violet-500',
-                                boletoDue: 'bg-yellow-500',
-                            };
+                            const eventTypeColors = { boletoSend: 'bg-cyan-500', task: 'bg-red-500', renewal: 'bg-violet-500', boletoDue: 'bg-yellow-500' };
                             const eventTypesOnDay = new Set(dayEvents.map(e => e.type));
 
                             return (
-                                <div key={dayKey} onClick={() => setSelectedDate(day)} className={cn("border border-gray-200/50 dark:border-white/10 p-2 hover:bg-cyan-500/10 transition-colors cursor-pointer rounded-lg min-h-[5rem]", isSelected && "ring-2 ring-cyan-500", isToday && "bg-cyan-100/30 dark:bg-cyan-900/20")}>
-                                    <div className="flex items-center gap-2">
-                                        <span className={cn("font-bold", isToday ? "text-cyan-600 dark:text-cyan-300" : "text-gray-800 dark:text-white")}>{day.getDate()}</span>
+                                <div key={dayKey} onClick={() => setSelectedDate(day)} className={cn("border border-gray-200/50 dark:border-white/10 p-2 transition-all duration-200 cursor-pointer rounded-lg min-h-[5rem] hover:scale-105", isSelected ? "ring-2 ring-cyan-500 bg-cyan-500/10" : "hover:bg-cyan-500/5", isToday && !isSelected && "bg-cyan-100/30 dark:bg-cyan-900/20")}>
+                                    <div className="flex justify-between items-start">
+                                        <span className={cn("font-bold text-sm", isToday ? "text-cyan-600 dark:text-cyan-300" : "text-gray-800 dark:text-white")}>{day.getDate()}</span>
                                         {dayEvents.length > 0 &&
-                                            <div className="flex items-center gap-1">
-                                                {Array.from(eventTypesOnDay).slice(0, 4).map(type => (
-                                                    <div key={type} className={cn("w-2.5 h-2.5 rounded-full", eventTypeColors[type] || 'bg-gray-400')}></div>
-                                                ))}
+                                            <div className="flex items-center gap-1.5 mt-1">
+                                                {Array.from(eventTypesOnDay).slice(0, 3).map(type => (<div key={type} className={cn("w-2 h-2 rounded-full", eventTypeColors[type] || 'bg-gray-400')}></div>))}
+                                                {eventTypesOnDay.size > 3 && <div className="w-2 h-2 rounded-full bg-gray-400"></div>}
                                             </div>
                                         }
                                     </div>
@@ -267,7 +278,14 @@ function CalendarPage({ onNavigate }) {
                 <GlassPanel className="p-6 flex flex-col">
                     <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-4 flex-shrink-0">Agenda do Dia <span className="text-cyan-500">{selectedDate.toLocaleDateString('pt-BR', { day: '2-digit', month: 'long' })}</span></h3>
                     <div className="flex-grow overflow-y-auto space-y-3 pr-2">
-                        <DayAgenda />
+                        <DayAgenda 
+                            selectedDate={selectedDate}
+                            events={eventsByDay[selectedDate.toISOString().split('T')[0]]}
+                            completedEventIds={completedEventIds}
+                            users={users}
+                            onToggleCompletion={toggleEventCompletion}
+                            onPostpone={(event, target) => setPopoverState({ isOpen: true, event, target })}
+                        />
                     </div>
                 </GlassPanel>
             </div>

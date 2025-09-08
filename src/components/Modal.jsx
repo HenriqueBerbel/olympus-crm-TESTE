@@ -5,11 +5,9 @@ import Button from './Button';
 import { XIcon } from './Icons';
 import { cn } from '../utils';
 
-// ALTERAÇÃO: O tamanho padrão agora é 'lg', um valor mais versátil.
-const Modal = ({ isOpen, onClose, title, children, size = 'lg' }) => {
+const Modal = ({ isOpen, onClose, title, children, size = 'lg', closeOnClickOutside = true }) => {
     if (!isOpen) return null;
 
-    // ALTERAÇÃO: Adicionados todos os tamanhos comuns para tornar o modal mais flexível.
     const sizeClasses = {
         sm: 'max-w-sm',
         md: 'max-w-md',
@@ -24,12 +22,14 @@ const Modal = ({ isOpen, onClose, title, children, size = 'lg' }) => {
     return createPortal(
         <div
             className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 dark:bg-black/80 animate-fade-in p-4 pt-16 sm:pt-24 overflow-y-auto"
-            onClick={onClose}
+            // MODIFICAÇÃO: A mágica acontece aqui!
+            // Agora, o modal só fecha se 'closeOnClickOutside' for verdadeiro.
+            onClick={closeOnClickOutside ? onClose : undefined}
         >
             <GlassPanel
                 className={cn(
                     "relative w-full animate-slide-up flex flex-col",
-                    sizeClasses[size] // Esta linha agora funcionará para 'md' e outros tamanhos.
+                    sizeClasses[size]
                 )}
                 onClick={(e) => e.stopPropagation()}
             >

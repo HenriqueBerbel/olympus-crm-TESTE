@@ -7,12 +7,12 @@ import { db } from '../firebase/firebase.js';
 import { useAuth } from './AuthContext.jsx';
 import { FileTextIcon, CheckSquareIcon } from '../components/Icons';
 
-const DataContext = createContext();
+const DataContext = createContext(null);
 
 export const DataProvider = ({ children }) => {
     const { user } = useAuth();
 
-    // Estados
+    // --- ESTADOS ---
     const [clients, setClients] = useState([]);
     const [leads, setLeads] = useState([]);
     const [tasks, setTasks] = useState([]);
@@ -29,7 +29,7 @@ export const DataProvider = ({ children }) => {
     const [productions, setProductions] = useState([]);
     const [loading, setLoading] = useState(true);
     
-    // Função de Log
+    // --- FUNÇÃO DE LOG ---
     const logAction = useCallback(async (logData) => {
         if (!db || !user) return;
         try {
@@ -43,14 +43,16 @@ export const DataProvider = ({ children }) => {
         } catch (error) { console.error("Erro ao registrar log:", error); }
     }, [user]);
 
-    // Efeito para buscar dados do Firestore
+    // --- EFEITO PRINCIPAL PARA BUSCA DE DADOS ---
     useEffect(() => {
         if (!user || !db) {
             setLoading(false);
-            setClients([]); setLeads([]); setTasks([]); setUsers([]); setRoles([]);
-            setTimeline([]); setOperators([]); setCommissions([]); setCompanyProfile(null);
-            setLeadColumns([]); setTaskColumns([]); setCompletedEvents([]); 
-            setPartners([]); setProductions([]);
+            const clearAllStates = [
+                setClients, setLeads, setTasks, setUsers, setRoles, setTimeline,
+                setOperators, setCommissions, setCompanyProfile, setLeadColumns,
+                setTaskColumns, setCompletedEvents, setPartners, setProductions
+            ];
+            clearAllStates.forEach(setter => setter(setter === setCompanyProfile ? null : []));
             return;
         }
 
@@ -64,55 +66,50 @@ export const DataProvider = ({ children }) => {
             { name: 'partners', setter: setPartners }, { name: 'productions', setter: setProductions }
         ];
 
-        let initialLoads = collectionsToFetch.length + 3;
+        let initialLoadCount = collectionsToFetch.length + 3;
         const onInitialLoadDone = () => {
-            initialLoads--;
-            if (initialLoads <= 0) {
-                setLoading(false);
-            }
+            initialLoadCount--;
+            if (initialLoadCount <= 0) setLoading(false);
         };
 
         const unsubscribes = collectionsToFetch.map(({ name, setter, sort }) => {
-            const collRef = collection(db, name);
-            const q = sort ? query(collRef, orderBy(sort[0], sort[1])) : collRef;
+            const q = sort ? query(collection(db, name), orderBy(...sort)) : collection(db, name);
             return onSnapshot(q, (snapshot) => {
                 setter(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                 onInitialLoadDone();
-            }, (error) => {
-                console.error(`Erro ao buscar ${name}:`, error);
-                setter([]);
-                onInitialLoadDone();
-            });
+            }, (error) => { console.error(`Erro ao buscar ${name}:`, error); setter([]); onInitialLoadDone(); });
         });
 
-        const unsubLeadCols = onSnapshot(query(collection(db, 'kanban_columns'), where('boardId', '==', 'leads'), orderBy('order')), (snapshot) => { setLeadColumns(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))); onInitialLoadDone(); });
-        const unsubTaskCols = onSnapshot(query(collection(db, 'kanban_columns'), where('boardId', '==', 'tasks'), orderBy('order')), (snapshot) => { setTaskColumns(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))); onInitialLoadDone(); });
-        const unsubProfile = onSnapshot(doc(db, 'company_profile', 'main'), (doc) => { setCompanyProfile(doc.exists() ? doc.data() : null); onInitialLoadDone(); });
+        const unsubLeadCols = onSnapshot(query(collection(db, 'kanban_columns'), where('boardId', '==', 'leads'), orderBy('order')), (s) => { setLeadColumns(s.docs.map(d => ({ id: d.id, ...d.data() }))); onInitialLoadDone(); });
+        const unsubTaskCols = onSnapshot(query(collection(db, 'kanban_columns'), where('boardId', '==', 'tasks'), orderBy('order')), (s) => { setTaskColumns(s.docs.map(d => ({ id: d.id, ...d.data() }))); onInitialLoadDone(); });
+        const unsubProfile = onSnapshot(doc(db, 'company_profile', 'main'), (d) => { setCompanyProfile(d.exists() ? d.data() : null); onInitialLoadDone(); });
 
         unsubscribes.push(unsubLeadCols, unsubTaskCols, unsubProfile);
         
         return () => unsubscribes.forEach(unsub => unsub?.());
     }, [user]);
 
-    // Lógica de Geração de Eventos para o Calendário
+    // --- GERAÇÃO DE EVENTOS PARA O CALENDÁRIO ---
     const actionableEvents = useMemo(() => {
         const events = [];
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
+        // **CORREÇÃO CRÍTICA APLICADA AQUI**
         if (clients) {
             clients.forEach(client => {
                 (client.contracts || []).forEach(contract => {
-                    if (contract.status !== 'ativo') return;
-                    if (contract.boletoSentDate) {
-                        const validDate = new Date(contract.boletoSentDate);
-                        const sendDay = validDate.getDate() + 1;
-                        let eventDate = new Date(today.getFullYear(), today.getMonth(), sendDay);
-                        if (eventDate < today) {
-                            eventDate = new Date(today.getFullYear(), today.getMonth() + 1, sendDay);
-                        }
+                    if (contract.status !== 'ativo' || !contract.boletoSentDate) return;
+                    
+                    const validDate = new Date(contract.boletoSentDate + 'T00:00:00');
+                    const sendDay = validDate.getDate();
+
+                    for (let monthOffset = -2; monthOffset <= 12; monthOffset++) {
+                        const eventDate = new Date(today.getFullYear(), today.getMonth() + monthOffset, sendDay);
+                        const eventOccurrenceId = `boleto-${client.id}-${contract.id || ''}-${eventDate.getFullYear()}-${eventDate.getMonth()}`;
+
                         events.push({
-                            id: `boleto-${client.id}-${contract.id || ''}`,
+                            id: eventOccurrenceId,
                             title: `Enviar boleto para ${client.general?.companyName || client.general?.holderName}`,
                             date: eventDate, type: 'boletoSend', color: 'bg-cyan-500', icon: FileTextIcon,
                             data: { client, contract }
@@ -126,10 +123,9 @@ export const DataProvider = ({ children }) => {
             tasks.forEach(task => {
                 if (task.dueDate && task.status !== 'Concluída') {
                     events.push({
-                        id: `task-${task.id}`,
-                        title: `Tarefa: ${task.title}`,
-                        date: new Date(task.dueDate), type: 'task', color: task.color || 'bg-red-500', icon: CheckSquareIcon,
-                        data: { task }
+                        id: `task-${task.id}`, title: `Tarefa: ${task.title}`,
+                        date: new Date(task.dueDate + 'T00:00:00'), type: 'task',
+                        color: task.color || 'bg-red-500', icon: CheckSquareIcon, data: { task }
                     });
                 }
             });
@@ -137,281 +133,130 @@ export const DataProvider = ({ children }) => {
         return events;
     }, [clients, tasks]);
 
-    const toggleEventCompletion = useCallback(async (event, isCompleted) => {
-        if (!user) return false;
-        const completedEventsRef = collection(db, "completed_events");
-        try {
-            if (isCompleted) {
-                await addDoc(completedEventsRef, {
-                    eventId: event.id,
-                    userId: user.uid,
-                    completedAt: serverTimestamp(),
-                });
-            } else {
-                const q = query(completedEventsRef, where("eventId", "==", event.id), where("userId", "==", user.uid));
-                const snapshot = await getDocs(q);
-                const batch = writeBatch(db);
-                snapshot.forEach(doc => batch.delete(doc.ref));
-                await batch.commit();
+    // --- FUNÇÕES DE CRUD (Create, Read, Update, Delete) ---
+    // **MELHORIA ARQUITETURAL: "FÁBRICA" DE FUNÇÕES CRUD**
+    const createCrudHandlers = (collectionName, singularName, moduleName, nameField = 'name') => {
+        const getName = (data) => {
+            if (typeof nameField === 'function') return nameField(data);
+            return nameField.split('.').reduce((o, i) => o?.[i], data) || `item sem nome`;
+        };
+
+        const add = useCallback(async (data) => {
+            if (!db || !user) throw new Error("Usuário não autenticado.");
+            let dataToSave = { ...data, ownerId: user.uid, createdAt: serverTimestamp() };
+            if(collectionName === 'leads') dataToSave.lastActivityDate = serverTimestamp();
+            const docRef = await addDoc(collection(db, collectionName), dataToSave);
+            logAction({ actionType: 'CRIAÇÃO', module: moduleName, description: `criou o ${singularName} ${getName(dataToSave)}.` });
+            return { id: docRef.id, ...dataToSave };
+        }, [user, logAction]);
+
+        const update = useCallback(async (id, data) => {
+            if (!db) throw new Error("Conexão com o banco de dados perdida.");
+            let dataToUpdate = {...data};
+            if(collectionName === 'leads') dataToUpdate.lastActivityDate = serverTimestamp();
+            if(collectionName === 'tasks' && data.status === 'Concluída') {
+                const existingTask = (tasks || []).find(t => t.id === id);
+                if (!existingTask?.completedAt) dataToUpdate.completedAt = serverTimestamp();
             }
+            await updateDoc(doc(db, collectionName, id), dataToUpdate);
+            logAction({ actionType: 'EDIÇÃO', module: moduleName, description: `atualizou o ${singularName} ${getName(dataToUpdate)}.` });
             return true;
-        } catch (error) {
-            console.error("Erro ao alterar status do evento:", error);
-            return false;
+        }, [user, logAction, tasks]);
+
+        const remove = useCallback(async (id, itemName) => {
+            if (!db) throw new Error("Conexão com o banco de dados perdida.");
+            await deleteDoc(doc(db, collectionName, id));
+            logAction({ actionType: 'EXCLUSÃO', module: moduleName, description: `excluiu o ${singularName} ${itemName}.` });
+            return true;
+        }, [logAction]);
+
+        return { add, update, remove };
+    };
+
+    const { add: addClient, update: updateClient, remove: deleteClient } = createCrudHandlers('clients', 'cliente', 'Clientes', data => data.general?.companyName || data.general?.holderName);
+    const { add: addLead, update: updateLead, remove: deleteLead } = createCrudHandlers('leads', 'lead', 'Leads');
+    const { add: addTask, update: updateTask, remove: deleteTask } = createCrudHandlers('tasks', 'tarefa', 'Tarefas', 'title');
+    const { add: addOperator, update: updateOperator, remove: deleteOperator } = createCrudHandlers('operators', 'operadora', 'Corporativo');
+    const { add: addPartner, update: updatePartner, remove: deletePartner } = createCrudHandlers('partners', 'parceiro', 'Corporativo');
+    const { add: addProduction, update: updateProduction, remove: deleteProduction } = createCrudHandlers('productions', 'produção', 'Produção', 'clientName');
+    const { add: addCommission, update: updateCommission, remove: deleteCommission } = createCrudHandlers('commissions', 'comissão', 'Comissões', 'clientName');
+
+    // --- FUNÇÕES ESPECÍFICAS (LÓGICA ORIGINAL RESTAURADA) ---
+    const toggleEventCompletion = useCallback(async (event, isCompleted) => {
+        if (!user) throw new Error("Usuário não autenticado.");
+        const completedEventsRef = collection(db, "completed_events");
+        if (isCompleted) {
+            await addDoc(completedEventsRef, {
+                eventId: event.id,
+                userId: user.uid,
+                completedAt: serverTimestamp(),
+            });
+        } else {
+            const q = query(completedEventsRef, where("eventId", "==", event.id), where("userId", "==", user.uid));
+            const snapshot = await getDocs(q);
+            const batch = writeBatch(db);
+            snapshot.forEach(doc => batch.delete(doc.ref));
+            await batch.commit();
         }
+        return true;
     }, [user]);
 
     const updateRole = useCallback(async (roleId, dataToUpdate) => {
-        if (!db) return false;
-        try {
-            const roleRef = doc(db, "roles", roleId);
-            await updateDoc(roleRef, dataToUpdate);
-            const roleName = roles.find(r => r.id === roleId)?.name || 'Desconhecido';
-            logAction({ actionType: 'EDIÇÃO', module: 'Corporativo', description: `Atualizou as permissões do cargo ${roleName}.` });
-            return true;
-        } catch (e) { console.error("Erro ao atualizar cargo:", e); return false; }
+        if (!db) throw new Error("Conexão com o banco de dados perdida.");
+        const roleRef = doc(db, "roles", roleId);
+        await updateDoc(roleRef, dataToUpdate);
+        const roleName = roles.find(r => r.id === roleId)?.name || 'Desconhecido';
+        logAction({ actionType: 'EDIÇÃO', module: 'Corporativo', description: `Atualizou as permissões do cargo ${roleName}.` });
+        return true;
     }, [logAction, roles]);
-
-    const addClient = useCallback(async (clientData) => {
-        if(!db || !user) return null;
-        try {
-            const dataToSave = { ...clientData, ownerId: user.uid, createdAt: serverTimestamp() };
-            const docRef = await addDoc(collection(db, "clients"), dataToSave);
-            logAction({ actionType: 'CRIAÇÃO', module: 'Clientes', description: `criou o cliente ${clientData.general.holderName || clientData.general.companyName}.` });
-            return { id: docRef.id, ...dataToSave };
-        } catch (e) { console.error("Erro ao adicionar cliente:", e); return null; }
-    }, [user, logAction]);
-    
-    const updateClient = useCallback(async (clientId, updatedData) => {
-        if (!db) return false;
-        try {
-            const clientRef = doc(db, "clients", clientId);
-            await updateDoc(clientRef, updatedData);
-            logAction({ actionType: 'EDIÇÃO', module: 'Clientes', description: `atualizou o cliente ${updatedData.general?.holderName || updatedData.general?.companyName}.` });
-            return true;
-        } catch (e) { console.error("Erro ao atualizar cliente:", e); return false; }
-    }, [logAction]);
-
-    const deleteClient = useCallback(async (clientId, clientName) => {
-        if(!db) return false;
-        try {
-            await deleteDoc(doc(db, "clients", clientId));
-            logAction({ actionType: 'EXCLUSÃO', module: 'Clientes', description: `excluiu o cliente ${clientName}.` });
-            return true;
-        } catch (e) { console.error("Erro ao deletar cliente:", e); return false; }
-    }, [logAction]);
-
-    const addLead = useCallback(async (leadData) => {
-        if(!db || !user) return null;
-        try {
-            const dataToSave = { ...leadData, ownerId: user.uid, createdAt: serverTimestamp(), lastActivityDate: serverTimestamp() };
-            const docRef = await addDoc(collection(db, "leads"), dataToSave);
-            logAction({ actionType: 'CRIAÇÃO', module: 'Leads', description: `criou o lead ${leadData.name}.` });
-            return { id: docRef.id, ...dataToSave };
-        } catch (e) { console.error("Erro ao adicionar lead:", e); return null; }
-    }, [user, logAction]);
-
-    const updateLead = useCallback(async (leadId, updatedData) => {
-        if (!db) return false;
-        try {
-            await updateDoc(doc(db, "leads", leadId), { ...updatedData, lastActivityDate: serverTimestamp() });
-            logAction({ actionType: 'EDIÇÃO', module: 'Leads', description: `atualizou o lead ${updatedData.name}.` });
-            return true;
-        } catch (e) { console.error("Erro ao atualizar lead:", e); return false; }
-    }, [logAction]);
-
-    const deleteLead = useCallback(async (leadId, leadName) => {
-        if(!db) return false;
-        try {
-            await deleteDoc(doc(db, "leads", leadId));
-            logAction({ actionType: 'EXCLUSÃO', module: 'Leads', description: `excluiu o lead ${leadName}.`});
-            return true;
-        } catch (error) { console.error("Falha ao deletar lead no DataContext:", error); return false; }
-    }, [logAction]);
-
-    const addTask = useCallback(async (taskData) => {
-        if (!db || !user) return null;
-        try {
-            const dataToSave = { ...taskData, ownerId: user.uid, createdAt: serverTimestamp() };
-            const docRef = await addDoc(collection(db, "tasks"), dataToSave);
-            
-            if (taskData.assignedTo && taskData.assignedTo !== user.uid) {
-                await addDoc(collection(db, "notifications"), {
-                    recipientId: taskData.assignedTo, senderName: user.name,
-                    message: `${user.name} atribuiu uma nova tarefa para você: "${taskData.title}"`,
-                    page: 'tasks', isRead: false, createdAt: serverTimestamp(),
-                });
-            }
-            
-            logAction({ actionType: 'CRIAÇÃO', module: 'Tarefas', description: `criou a tarefa "${taskData.title}".` });
-            return { id: docRef.id, ...dataToSave };
-        } catch (e) { console.error("Erro ao adicionar tarefa:", e); return null; }
-    }, [user, logAction]);
-
-    const updateTask = useCallback(async (taskId, updatedData) => {
-        if(!db) return false;
-        try {
-            const dataToUpdate = { ...updatedData };
-            const existingTask = tasks.find(t => t.id === taskId);
-            if (updatedData.status === 'Concluída' && !existingTask?.completedAt) {
-                dataToUpdate.completedAt = serverTimestamp();
-            }
-            await updateDoc(doc(db, "tasks", taskId), dataToUpdate);
-            logAction({ actionType: 'EDIÇÃO', module: 'Tarefas', description: `atualizou a tarefa "${updatedData.title}".` });
-            return true;
-        } catch (e) { console.error("Erro ao atualizar tarefa:", e); return false; }
-    }, [logAction, tasks]);
-
-    const deleteTask = useCallback(async (taskId, taskTitle) => {
-        if(!db) return false;
-        try {
-            await deleteDoc(doc(db, "tasks", taskId));
-            logAction({ actionType: 'EXCLUSÃO', module: 'Tarefas', description: `excluiu a tarefa "${taskTitle}".`});
-            return true;
-        } catch (e) { console.error("Erro ao deletar tarefa:", e); return false; }
-    }, [logAction]);
-
-    const addOperator = useCallback(async (operatorData) => {
-        if(!db) return false;
-        try {
-            await addDoc(collection(db, "operators"), operatorData);
-            logAction({ actionType: 'CRIAÇÃO', module: 'Corporativo', description: `adicionou a operadora ${operatorData.name}.` });
-            return true;
-        } catch (e) { console.error("Erro ao adicionar operadora:", e); return false; }
-    }, [logAction]);
-    
-    const updateOperator = useCallback(async (operatorId, dataToUpdate) => {
-        if(!db) return false;
-        try {
-            await updateDoc(doc(db, "operators", operatorId), dataToUpdate);
-            logAction({ actionType: 'EDIÇÃO', module: 'Corporativo', description: `atualizou a operadora ${dataToUpdate.name}.` });
-            return true;
-        } catch (e) { console.error("Erro ao atualizar operadora:", e); return false; }
-    }, [logAction]);
-
-    const deleteOperator = useCallback(async (operatorId, operatorName) => {
-        if(!db) return false;
-        try {
-            await deleteDoc(doc(db, "operators", operatorId));
-            logAction({ actionType: 'EXCLUSÃO', module: 'Corporativo', description: `removeu a operadora ${operatorName}.` });
-            return true;
-        } catch (e) { console.error("Erro ao deletar operadora:", e); return false; }
-    }, [logAction]);
-    
-    const addPartner = useCallback(async (partnerData) => {
-        if(!db) return false;
-        try {
-            await addDoc(collection(db, "partners"), partnerData);
-            logAction({ actionType: 'CRIAÇÃO', module: 'Corporativo', description: `adicionou o parceiro ${partnerData.name}.` });
-            return true;
-        } catch (e) { console.error("Erro ao adicionar parceiro:", e); return false; }
-    }, [logAction]);
-
-    const updatePartner = useCallback(async (partnerId, partnerData) => {
-        if(!db) return false;
-        try {
-            await updateDoc(doc(db, "partners", partnerId), partnerData);
-            logAction({ actionType: 'EDIÇÃO', module: 'Corporativo', description: `atualizou o parceiro ${partnerData.name}.` });
-            return true;
-        } catch (e) { console.error("Erro ao atualizar parceiro:", e); return false; }
-    }, [logAction]);
-    
-    const deletePartner = useCallback(async (partnerId, partnerName) => {
-        if(!db) return false;
-        try {
-            await deleteDoc(doc(db, "partners", partnerId));
-            logAction({ actionType: 'EXCLUSÃO', module: 'Corporativo', description: `removeu o parceiro ${partnerName}.` });
-            return true;
-        } catch (e) { console.error("Erro ao deletar parceiro:", e); return false; }
-    }, [logAction]);
-    
-    const addCommission = useCallback(async (commissionData) => {
-        if(!db || !user) return null;
-        try {
-            const dataToSave = { ...commissionData, ownerId: user.uid, createdAt: serverTimestamp() };
-            const docRef = await addDoc(collection(db, "commissions"), dataToSave);
-            logAction({ actionType: 'CRIAÇÃO', module: 'Comissões', description: `lançou comissão para ${commissionData.clientName}.` });
-            return { id: docRef.id, ...dataToSave };
-        } catch (e) { console.error("Erro ao adicionar comissão:", e); return null; }
-    }, [user, logAction]);
-    
-    const addProduction = useCallback(async (productionData) => {
-        if(!db || !user) return null;
-        try {
-            const dataToSave = { ...productionData, ownerId: user.uid, createdAt: serverTimestamp() };
-            const docRef = await addDoc(collection(db, "productions"), dataToSave);
-            logAction({ actionType: 'CRIAÇÃO', module: 'Produção', description: `lançou produção para ${productionData.clientName}.` });
-            return { id: docRef.id, ...dataToSave };
-        } catch(e) { console.error("Erro ao adicionar produção:", e); return null; }
-    }, [user, logAction]);
-
-    const updateProduction = useCallback(async (productionId, dataToUpdate) => {
-        if(!db) return false;
-        try {
-            await updateDoc(doc(db, "productions", productionId), dataToUpdate);
-            logAction({ actionType: 'EDIÇÃO', module: 'Produção', description: `atualizou a produção do cliente ${dataToUpdate.clientName}.` });
-            return true;
-        } catch (e) { console.error("Erro ao atualizar produção:", e); return false; }
-    }, [logAction]);
-
-    const deleteProduction = useCallback(async (productionId, clientName) => {
-        if(!db) return false;
-        try {
-            await deleteDoc(doc(db, "productions", productionId));
-            logAction({ actionType: 'EXCLUSÃO', module: 'Produção', description: `excluiu a produção do cliente ${clientName}.` });
-            return true;
-        } catch (e) { console.error("Erro ao deletar produção:", e); return false; }
-    }, [logAction]);
     
     const deleteKanbanColumn = useCallback(async (columnId) => {
-        if (!db) return false;
-        try {
-            await deleteDoc(doc(db, "kanban_columns", columnId));
-            logAction({ actionType: 'EXCLUSÃO', module: 'Kanban', description: `Excluiu uma coluna do quadro.` });
-            return true;
-        } catch (error) { console.error("Erro ao deletar coluna Kanban:", error); return false; }
+        if (!db) throw new Error("Conexão com o banco de dados perdida.");
+        await deleteDoc(doc(db, "kanban_columns", columnId));
+        logAction({ actionType: 'EXCLUSÃO', module: 'Kanban', description: `Excluiu uma coluna do quadro.` });
+        return true;
     }, [logAction]);
 
     const updateCompanyProfile = useCallback(async (data) => {
-        if (!db) return false;
-        try {
-            const profileRef = doc(db, "company_profile", "main");
-            await setDoc(profileRef, data, { merge: true });
-            logAction({ actionType: 'EDIÇÃO', module: 'Corporativo', description: 'Atualizou o perfil da empresa.' });
-            return true;
-        } catch (error) { console.error("Erro ao atualizar perfil da empresa:", error); return false; }
+        if (!db) throw new Error("Conexão com o banco de dados perdida.");
+        const profileRef = doc(db, "company_profile", "main");
+        await setDoc(profileRef, data, { merge: true });
+        logAction({ actionType: 'EDIÇÃO', module: 'Corporativo', description: 'Atualizou o perfil da empresa.' });
+        return true;
     }, [logAction]);
 
+    // --- VALOR DO CONTEXTO ---
     const value = useMemo(() => ({
-        loading,
-        clients, leads, tasks, users, roles, timeline, operators, 
+        loading, clients, leads, tasks, users, roles, timeline, operators, 
         commissions, companyProfile, leadColumns, taskColumns, 
-        completedEvents, partners, productions,
-        actionableEvents,
-        logAction,
-        toggleEventCompletion,
-        updateRole, 
+        completedEvents, partners, productions, actionableEvents,
+        logAction, toggleEventCompletion, updateRole,
         addClient, updateClient, deleteClient,
         addLead, updateLead, deleteLead,
         addTask, updateTask, deleteTask,
         addOperator, updateOperator, deleteOperator,
         addPartner, updatePartner, deletePartner,
-        addCommission,
+        addCommission, updateCommission, deleteCommission,
         addProduction, updateProduction, deleteProduction,
-        deleteKanbanColumn,
-        updateCompanyProfile,
+        deleteKanbanColumn, updateCompanyProfile,
     }), [
         loading, clients, leads, tasks, users, roles, timeline, operators, 
-        commissions, companyProfile, leadColumns, taskColumns, 
-        completedEvents, partners, productions,
-        actionableEvents, logAction, toggleEventCompletion, updateRole, 
-        addClient, updateClient, deleteClient, addLead, updateLead, deleteLead,
-        addTask, updateTask, deleteTask, addOperator, updateOperator, deleteOperator,
-        addPartner, updatePartner, deletePartner, addCommission, addProduction, 
-        updateProduction, deleteProduction, deleteKanbanColumn, updateCompanyProfile
+        commissions, companyProfile, leadColumns, taskColumns, completedEvents,
+        partners, productions, actionableEvents, logAction, toggleEventCompletion,
+        updateRole, addClient, updateClient, deleteClient, addLead, updateLead,
+        deleteLead, addTask, updateTask, deleteTask, addOperator, updateOperator,
+        deleteOperator, addPartner, updatePartner, deletePartner, addCommission,
+        updateCommission, deleteCommission, addProduction, updateProduction,
+        deleteProduction, deleteKanbanColumn, updateCompanyProfile
     ]);
 
     return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
 };
 
-export const useData = () => useContext(DataContext);
+export const useData = () => {
+    const context = useContext(DataContext);
+    if (context === null) {
+        throw new Error("useData must be used within a DataProvider");
+    }
+    return context;
+};

@@ -21,7 +21,12 @@ const ConfirmDialog = () => {
     } = confirmState;
 
     return (
-        <Modal isOpen={!!confirmState} onClose={handleCancel} size={size}>
+        <Modal 
+            isOpen={!!confirmState} 
+            onClose={handleCancel} 
+            size={size} 
+            closeOnClickOutside={false} // <-- A ÚNICA MUDANÇA É AQUI!
+        >
             {/* O conteúdo do modal foi totalmente redesenhado */}
             <div className="text-center p-2">
                 {/* Ícone centralizado e estilizado */}

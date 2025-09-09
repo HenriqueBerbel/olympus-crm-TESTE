@@ -3,10 +3,13 @@ import { calculateAge } from '../../utils';
 import Modal from '../Modal';
 import Label from '../Label';
 import Input from '../Input';
-import Select from '../Select';
 import DateField from '../DateField';
 import Button from '../Button';
 import { useToast } from '../../contexts/NotificationContext';
+
+// [CORREÇÃO 1]: Importação corrigida para usar chaves {} (nomeada)
+// e já trazemos o SelectItem que será necessário.
+import { Select, SelectItem } from '../Select';
 
 const BeneficiaryModal = ({ isOpen, onClose, onSave, beneficiary }) => {
     const { toast } = useToast();
@@ -21,18 +24,15 @@ const BeneficiaryModal = ({ isOpen, onClose, onSave, beneficiary }) => {
     const [isSaving, setIsSaving] = useState(false);
     const kinshipOptions = ["Titular", "Pai", "Mãe", "Tia", "Tio", "Avô", "Avó", "Filho(a)", "Esposa", "Marido", "Sobrinho(a)", "Neto(a)", "Outro"];
 
-    // Efeito para popular/limpar o formulário quando o modal abre/fecha
     useEffect(() => {
         if (isOpen) {
             setFormState(beneficiary ? { ...getInitialFormState(), ...beneficiary } : getInitialFormState());
         } else {
-            // Garante a limpeza completa ao fechar
             setFormState(getInitialFormState());
             setIsSaving(false);
         }
     }, [isOpen, beneficiary]);
 
-    // MELHORIA: useMemo para cálculos derivados, mais performático que useEffect
     const age = useMemo(() => {
         return formState.dob ? calculateAge(formState.dob) : null;
     }, [formState.dob]);
@@ -62,6 +62,12 @@ const BeneficiaryModal = ({ isOpen, onClose, onSave, beneficiary }) => {
         } else {
             setFormState(p => ({ ...p, [name]: value }));
         }
+    };
+    
+    // [CORREÇÃO 2]: Criada uma função específica para o Select do Radix,
+    // que usa onValueChange e passa o valor diretamente.
+    const handleKinshipChange = (value) => {
+        setFormState(p => ({ ...p, kinship: value }));
     };
 
     const handleSubmit = async (e) => {
@@ -106,7 +112,23 @@ const BeneficiaryModal = ({ isOpen, onClose, onSave, beneficiary }) => {
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
                     <div><Label>IMC</Label><p className="h-10 flex items-center px-3 text-gray-700 dark:text-gray-300">{imc.value ? `${imc.value} - ${imc.classification}` : 'N/D'}</p></div>
-                    <div><Label htmlFor="b-kinship">Parentesco</Label><Select id="b-kinship" name="kinship" value={formState.kinship} onChange={handleChange} required disabled={isSaving}>{kinshipOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}</Select></div>
+                    
+                    {/* [CORREÇÃO 3]: O componente <Select> foi atualizado para usar
+                       onValueChange e renderizar <SelectItem> em vez de <option> */}
+                    <div>
+                        <Label htmlFor="b-kinship">Parentesco</Label>
+                        <Select 
+                            id="b-kinship"
+                            name="kinship" 
+                            value={formState.kinship} 
+                            onValueChange={handleKinshipChange}
+                            required 
+                            disabled={isSaving}
+                        >
+                            {kinshipOptions.map(opt => <SelectItem key={opt} value={opt}>{opt}</SelectItem>)}
+                        </Select>
+                    </div>
+
                 </div>
                 <div><Label htmlFor="b-idCard">Número da Carteirinha</Label><Input id="b-idCard" name="idCardNumber" value={formState.idCardNumber || ''} onChange={handleChange} disabled={isSaving}/></div>
                 

@@ -1,3 +1,65 @@
+/* No seu arquivo src/index.css */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 240 5% 96%; /* cinza bem claro */
+    --foreground: 240 10% 4%; /* cinza quase preto */
+
+    --card: 240 5% 100%;
+    --card-foreground: 240 10% 4%;
+
+    --popover: 240 5% 100%;
+    --popover-foreground: 240 10% 4%;
+
+    --primary: 195 91% 45%; /* ciano */
+    --primary-foreground: 240 5% 100%;
+
+    --muted: 240 5% 90%;
+    --muted-foreground: 240 5% 45%;
+    
+    --accent: 240 5% 94%;
+    --accent-foreground: 240 10% 10%;
+
+    --destructive: 0 84% 60%;
+    
+    --border: 240 6% 88%;
+    --input: 240 6% 88%;
+    --ring: 195 91% 45%; /* ciano para foco */
+  }
+
+  .dark {
+    --background: 240 10% 4%; /* Fundo principal (preto azulado) */
+    --foreground: 220 15% 90%; /* Texto principal (cinza claro) */
+
+    /* Cards, Modals, Popovers */
+    --card: 240 6% 10%;
+    --card-foreground: 220 15% 90%;
+    --popover: 240 6% 12%;
+    --popover-foreground: 220 15% 90%;
+
+    /* Cores de Destaque */
+    --primary: 260 85% 65%; /* Violeta */
+    --primary-foreground: 220 15% 95%;
+
+    /* Cores para Ações Secundárias e Foco */
+    --accent: 260 85% 65%; /* Violeta para foco nos itens */
+    --accent-foreground: 220 15% 95%;
+
+    /* Cores de Texto e Elementos Silenciados */
+    --muted: 240 4% 18%;
+    --muted-foreground: 240 5% 55%;
+
+    /* Bordas e Inputs */
+    --border: 240 4% 20%;
+    --input: 240 4% 15%;
+    
+    /* Cor do Anel de Foco (efeito ao clicar) */
+    --ring: 195 91% 50%; /* Ciano */
+
+    /* Cor Destrutiva (para botões de excluir, etc.) */
+    --destructive: 0 63% 51%;
+  }
+}

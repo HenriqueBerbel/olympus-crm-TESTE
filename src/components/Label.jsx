@@ -1,23 +1,43 @@
 import React, { forwardRef, memo } from 'react';
-import { cn } from '../utils';
+import { motion } from 'framer-motion';
+import { clsx } from 'clsx';
+import { twMerge } from 'tailwind-merge';
 
-// 1. Definimos o componente com a capacidade de receber a `ref`
-const LabelWithRef = forwardRef(({ className, ...props }, ref) => (
-    <label
-        ref={ref}
-        className={cn(
-            "text-sm font-bold text-gray-600 dark:text-gray-400",
-            className
-        )}
-        {...props}
-    />
-));
+// --- Utilitário (interno para portabilidade) ---
+function cn(...inputs) {
+  return twMerge(clsx(inputs));
+}
 
-// 2. Aplicamos a otimização de performance com `memo`
-const MemoizedLabel = memo(LabelWithRef);
+/**
+ * Componente Label
+ * Exibe um rótulo para campos de formulário com estilo e animação consistentes.
+ */
+const Label = memo(forwardRef(({ className, children, ...props }, ref) => {
+    return (
+        <motion.label
+            ref={ref}
+            
+            // [MOTION] Animação de fade-in suave para o texto
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.4, ease: "easeOut" }}
+            
+            className={cn(
+                // [UI] Estilo de texto unificado com os outros componentes
+                "text-sm font-semibold text-slate-700 dark:text-slate-300",
+                
+                // [UX] Garante bom espaçamento e comportamento de layout
+                "block mb-1.5",
+                
+                className
+            )}
+            {...props}
+        >
+            {children}
+        </motion.label>
+    );
+}));
 
-// 3. (Opcional, mas recomendado) Adicionamos um nome de exibição para o Debugger
-MemoizedLabel.displayName = 'Label';
+Label.displayName = 'Label';
 
-// 4. Exportamos o componente final como padrão
-export default MemoizedLabel;
+export default Label;

@@ -1,10 +1,9 @@
 import React, { useMemo } from 'react';
-import { useData } from '../../contexts/DataContext';
-import FormSection from './FormSection'; // CORREÇÃO: Importado como default
-import Label from '../Label';
-import Select from '../Select';
+import { useData } from '/src/contexts/DataContext';
+import FormSection from '/src/components/forms/FormSection';
+import Label from '/src/components/Label';
+import { Select, SelectItem } from '/src/components/Select';
 
-// CORREÇÃO: Alterado de "export const" para uma constante simples
 const InternalDataForm = ({ formData, handleChange }) => {
     const { users, partners } = useData();
 
@@ -20,20 +19,36 @@ const InternalDataForm = ({ formData, handleChange }) => {
         return [...internal, ...external].sort((a, b) => a.name.localeCompare(b.name));
     }, [users, partners]);
 
+    const handleSelectChange = (name, value) => {
+        const event = {
+            target: {
+                name: name,
+                value: value
+            }
+        };
+        handleChange(event);
+    };
+
     return (
         <FormSection title="Dados Internos e Gestão" cols={2}>
             <div>
                 <Label>Corretor Responsável</Label>
-                <Select name="internal.brokerId" value={formData?.internal?.brokerId || ''} onChange={handleChange}>
-                    <option value="">Selecione...</option>
-                    {allBrokers.map(u => <option key={u.id} value={u.id}>{u?.name}</option>)}
+                <Select
+                    name="internal.brokerId"
+                    value={formData?.internal?.brokerId || ''}
+                    onValue-change={(value) => handleSelectChange('internal.brokerId', value)}
+                >
+                    {allBrokers.map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
                 </Select>
             </div>
             <div>
                 <Label>Supervisor</Label>
-                <Select name="internal.supervisorId" value={formData?.internal?.supervisorId || ''} onChange={handleChange}>
-                    <option value="">Selecione...</option>
-                    {allSupervisors.map(u => <option key={u.id} value={u.id}>{u?.name}</option>)}
+                <Select
+                    name="internal.supervisorId"
+                    value={formData?.internal?.supervisorId || ''}
+                    onValue-change={(value) => handleSelectChange('internal.supervisorId', value)}
+                >
+                    {allSupervisors.map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
                 </Select>
             </div>
         </FormSection>
@@ -41,3 +56,4 @@ const InternalDataForm = ({ formData, handleChange }) => {
 };
 
 export default InternalDataForm;
+

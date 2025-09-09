@@ -1,5 +1,6 @@
 import React, { useState, useMemo, memo, useEffect } from 'react';
 import { getFirestore, collection, doc, writeBatch, serverTimestamp } from "firebase/firestore";
+import { motion } from 'framer-motion';
 
 // Hooks e Contextos
 import { useData } from '../contexts/DataContext';
@@ -16,96 +17,85 @@ import DetailItem from '../components/DetailItem';
 import Badge from '../components/Badge';
 import Label from '../components/Label';
 import EmptyState from '../components/EmptyState';
+import { Avatar } from '../components/Avatar';
 
 // Ícones e Utilitários
 import { cn, formatDate } from '../utils';
-import { PaletteIcon, PlusCircleIcon, PencilIcon, Trash2Icon, CheckSquareIcon, ArchiveIcon } from '../components/Icons';
-
+import { PaletteIcon, PlusCircleIcon, PencilIcon, Trash2Icon, CheckSquareIcon, AlertTriangleIcon, ClockIcon } from '../components/Icons';
 
 // =================================================================================
-// SUBCOMPONENTES DA PÁGINA
+// VARIANTES DE ANIMAÇÃO
+// =================================================================================
+const boardVariants = { hidden: { opacity: 0 }, visible: { opacity: 1, transition: { staggerChildren: 0.1 } } };
+const columnVariants = { hidden: { opacity: 0, y: 30 }, visible: { opacity: 1, y: 0, transition: { staggerChildren: 0.07 } } };
+const cardVariants = { hidden: { opacity: 0, scale: 0.9 }, visible: { opacity: 1, scale: 1, transition: { duration: 0.3 } } };
+
+// =================================================================================
+// SUBCOMPONENTES DA PÁGINA (Refinados e Animados)
 // =================================================================================
 
 const TaskViewModal = memo(({ isOpen, onClose, task, users, clients, leads }) => {
     if (!task) return null;
-
     const assignedUser = (users || []).find(u => u.id === task.assignedTo);
-    const linkedItem = task.linkedToType === 'client' 
-        ? (clients || []).find(c => c.id === task.linkedToId) 
-        : (leads || []).find(l => l.id === task.linkedToId);
-    
-    const linkedItemName = linkedItem 
-        ? linkedItem.general?.companyName || linkedItem.general?.holderName || linkedItem.name 
-        : null;
-
-    const renderDescription = (desc) => { 
-        if (!desc) return <p className="text-gray-500 italic">Nenhuma descrição fornecida.</p>;
-        return (desc || '').split('\n').map((line, i) => <p key={i}>{line}</p>); 
-    };
+    const linkedItem = task.linkedToType === 'client' ? (clients || []).find(c => c.id === task.linkedToId) : (leads || []).find(l => l.id === task.linkedToId);
+    const linkedItemName = linkedItem ? (linkedItem.general?.companyName || linkedItem.general?.holderName || linkedItem.name) : null;
+    const renderDescription = (desc) => { if (!desc) return <p className="text-gray-500 italic">Nenhuma descrição fornecida.</p>; return (desc || '').split('\n').map((line, i) => <p key={i}>{line}</p>); };
 
     return (
         <Modal isOpen={isOpen} onClose={onClose} title={`Detalhes: ${task.title}`}>
             <div className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-4">
                     <DetailItem label="Status" value={task.status} />
-                    <DetailItem label="Prioridade">
-                        <Badge variant={task.priority === 'Alta' ? 'danger' : task.priority === 'Média' ? 'warning' : 'secondary'}>
-                            {task.priority}
-                        </Badge>
-                    </DetailItem>
+                    <DetailItem label="Prioridade"><Badge variant={task.priority === 'Alta' ? 'danger' : task.priority === 'Média' ? 'warning' : 'secondary'}>{task.priority}</Badge></DetailItem>
                     <DetailItem label="Prazo" value={formatDate(task.dueDate)} />
                     <DetailItem label="Responsável" value={assignedUser?.name} />
-                    {linkedItemName && (
-                         <DetailItem label={`Vinculado a ${task.linkedToType === 'client' ? 'Cliente' : 'Lead'}`} value={linkedItemName} />
-                    )}
+                    {linkedItemName && (<DetailItem label={`Vinculado a ${task.linkedToType === 'client' ? 'Cliente' : 'Lead'}`} value={linkedItemName} />)}
                 </div>
                 <div>
                     <Label>Descrição</Label>
-                    <div className="mt-1 text-md text-gray-800 dark:text-gray-100 prose dark:prose-invert max-w-none">
-                        {renderDescription(task.description)}
-                    </div>
+                    <div className="mt-1 text-md text-gray-800 dark:text-gray-100 prose dark:prose-invert max-w-none">{renderDescription(task.description)}</div>
                 </div>
             </div>
-            <div className="flex justify-end mt-8 pt-4 border-t border-gray-200 dark:border-white/10">
-                <Button variant="outline" onClick={onClose}>Fechar</Button>
-            </div>
+            <div className="flex justify-end mt-8 pt-4 border-t border-gray-200 dark:border-white/10"><Button variant="outline" onClick={onClose}>Fechar</Button></div>
         </Modal>
     );
 });
 
-const TaskCard = memo(({ task, onEdit, onDelete, onView, users, clients, leads }) => {
+const TaskCard = memo(({ task, onEdit, onDelete, onView, users }) => {
     const assignedUser = (users || []).find(u => u.id === task.assignedTo);
-    const linkedItem = task.linkedToType === 'client' 
-        ? (clients || []).find(c => c.id === task.linkedToId) 
-        : (leads || []).find(l => l.id === task.linkedToId);
-    
-    const linkedItemName = linkedItem ? (linkedItem.general?.companyName || linkedItem.general?.holderName || linkedItem.name) : '';
+    const isOverdue = task.dueDate && new Date(task.dueDate + 'T23:59:59') < new Date() && task.status !== 'Concluída';
+
+    const priorityClasses = {
+        'Alta': 'border-red-500',
+        'Média': 'border-yellow-500',
+        'Baixa': 'border-gray-400'
+    };
 
     return (
-        <GlassPanel 
-            className="p-4 cursor-grab active:cursor-grabbing group border-l-4"
-            style={{ borderColor: task.color || '#6B7280' }}
-            onDoubleClick={() => onView(task)}
-        >
-            <div className="flex justify-between items-start">
-                <p className="font-bold text-gray-900 dark:text-white flex-grow truncate" title={task.title}>{task.title}</p>
-                <div className="flex opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); onEdit(task); }}><PencilIcon className="h-4 w-4" /></Button>
-                    <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500/70 hover:text-red-400" onClick={(e) => { e.stopPropagation(); onDelete(task); }}><Trash2Icon className="h-4 w-4" /></Button>
+        <motion.div variants={cardVariants} whileHover={{ y: -4, scale: 1.03 }} whileTap={{ scale: 0.98 }}>
+            <GlassPanel 
+                className={cn("p-4 cursor-grab active:cursor-grabbing group border-l-4", priorityClasses[task.priority] || 'border-gray-400')}
+                onDoubleClick={() => onView(task)}
+            >
+                <div className="flex justify-between items-start">
+                    <p className="font-bold text-gray-900 dark:text-white flex-grow truncate pr-2" title={task.title}>{task.title}</p>
+                    <div className="flex opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); onEdit(task); }}><PencilIcon className="h-4 w-4" /></Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500/70" onClick={(e) => { e.stopPropagation(); onDelete(task); }}><Trash2Icon className="h-4 w-4" /></Button>
+                    </div>
                 </div>
-            </div>
-            
-            {linkedItem && (
-                <p className="text-xs mt-2 text-cyan-700 dark:text-cyan-400 bg-cyan-100 dark:bg-cyan-900/50 px-2 py-1 rounded-md inline-block">
-                    {task.linkedToType === 'client' ? 'CLIENTE: ' : 'LEAD: '} {linkedItemName}
-                </p>
-            )}
-            
-            <div className="mt-3 text-xs text-gray-500 flex justify-between items-center">
-                <span>Prazo: {task.dueDate ? formatDate(task.dueDate) : 'Sem prazo'}</span>
-                {assignedUser && <div className="w-6 h-6 rounded-full bg-violet-200 dark:bg-violet-900 flex items-center justify-center font-bold text-violet-700 dark:text-violet-300 border-2 border-violet-400 dark:border-violet-700" title={assignedUser.name}>{assignedUser.name?.[0]}</div>}
-            </div>
-        </GlassPanel>
+                
+                <div className="mt-3 flex justify-between items-center text-xs text-gray-500 dark:text-gray-400">
+                    <div className="flex items-center gap-2">
+                        <ClockIcon className={cn("h-4 w-4", isOverdue ? "text-red-500" : "text-gray-400")} />
+                        <span className={cn(isOverdue && "font-bold text-red-500")}>
+                            {task.dueDate ? formatDate(task.dueDate) : 'Sem prazo'}
+                        </span>
+                    </div>
+                    {assignedUser && <Avatar src={assignedUser.avatar} fallbackText={assignedUser.name?.[0]} title={assignedUser.name} className="w-6 h-6 text-xs" />}
+                </div>
+            </GlassPanel>
+        </motion.div>
     );
 });
 
@@ -117,9 +107,9 @@ const KanbanBoard = memo(({ columns, onDragEnd, children }) => {
     const handleDrop = (e, targetColumnId) => { e.preventDefault(); if (draggedItem && draggedItem.sourceColumnId !== targetColumnId) { onDragEnd(draggedItem.item, targetColumnId); } setDraggedItem(null); setDragOverColumn(null); };
 
     return (
-        <div className="flex gap-6 overflow-x-auto p-2">
+        <motion.div className="flex gap-6 overflow-x-auto p-2" variants={boardVariants} initial="hidden" animate="visible">
             {Object.values(columns).sort((a, b) => a.order - b.order).map((column) => (
-                <div key={column.id} className={cn("w-80 flex-shrink-0 flex flex-col rounded-xl transition-colors duration-300", dragOverColumn === column.id ? 'bg-gray-200/50 dark:bg-white/10' : '')} onDragOver={(e) => handleDragOver(e, column.id)} onDrop={(e) => handleDrop(e, column.id)} onDragLeave={() => setDragOverColumn(null)}>
+                <motion.div key={column.id} variants={columnVariants} className={cn("w-80 flex-shrink-0 flex flex-col rounded-xl transition-colors duration-300", dragOverColumn === column.id ? 'bg-gray-200/50 dark:bg-white/10' : '')} onDragOver={(e) => handleDragOver(e, column.id)} onDrop={(e) => handleDrop(e, column.id)} onDragLeave={() => setDragOverColumn(null)}>
                     <div className="p-4 flex justify-between items-center border-b-2" style={{ borderColor: column.color || '#3B82F6' }}>
                         <h3 className="font-semibold text-gray-900 dark:text-white flex items-center gap-2">
                             {column.title}
@@ -129,58 +119,50 @@ const KanbanBoard = memo(({ columns, onDragEnd, children }) => {
                     </div>
                     <div className="p-2 space-y-3 overflow-y-auto min-h-[200px]">
                         {column.items.length > 0 ? (column.items.map(item => (
-                            <div key={item.id} draggable onDragStart={(e) => handleDragStart(e, item, column.id)}>
+                            <motion.div key={item.id} layout draggable onDragStart={(e) => handleDragStart(e, item, column.id)}>
                                 {typeof children === 'function' && children(item)}
-                            </div>
+                            </motion.div>
                         ))) : (<div className="text-center text-sm text-gray-500 dark:text-gray-600 p-4">Nenhuma tarefa aqui.</div>)}
                     </div>
-                </div>
+                </motion.div>
             ))}
-        </div>
+        </motion.div>
     );
 });
-
 
 // =================================================================================
 // PÁGINA PRINCIPAL
 // =================================================================================
-
 const TasksPage = () => {
     const { tasks, updateTask, addTask, deleteTask, taskColumns, logAction, clients, leads, users } = useData();
     const { toast } = useToast();
     const confirm = useConfirm();
     const db = getFirestore();
     
-    // Estados da página
     const [isTaskModalOpen, setTaskModalOpen] = useState(false);
     const [isManageColumnsModalOpen, setManageColumnsModalOpen] = useState(false);
     const [editingTask, setEditingTask] = useState(null);
     const [viewingTask, setViewingTask] = useState(null);
 
-    // Efeito para arquivar tarefas concluídas automaticamente
     useEffect(() => {
         if (!Array.isArray(tasks) || !Array.isArray(taskColumns)) return;
-
         const conclusionColumn = taskColumns.find(c => c.isConclusion);
         if (!conclusionColumn || tasks.length === 0) return;
 
         const now = new Date();
         const twoDaysInMs = 2 * 24 * 60 * 60 * 1000;
-        const tasksToArchive = [];
-
-        tasks.forEach(task => {
+        const tasksToArchive = tasks.filter(task => {
             if (task.status === conclusionColumn.title && task.completedAt && !task.archived) {
                 const completedDate = task.completedAt.toDate();
-                if ((now - completedDate) > twoDaysInMs) {
-                    tasksToArchive.push(task.id);
-                }
+                return (now - completedDate) > twoDaysInMs;
             }
+            return false;
         });
 
         if (tasksToArchive.length > 0) {
             const batch = writeBatch(db);
-            tasksToArchive.forEach(taskId => {
-                const taskRef = doc(db, "tasks", taskId);
+            tasksToArchive.forEach(task => {
+                const taskRef = doc(db, "tasks", task.id);
                 batch.update(taskRef, { archived: true });
             });
             batch.commit().then(() => {
@@ -189,48 +171,35 @@ const TasksPage = () => {
         }
     }, [tasks, taskColumns, db, toast]);
 
-    // Lógica segura para preparar os dados do Kanban
     const columnsForBoard = useMemo(() => {
-        const safeTasks = Array.isArray(tasks) ? tasks : [];
-        const safeColumns = Array.isArray(taskColumns) ? taskColumns : [];
-        const visibleTasks = safeTasks.filter(task => !task.archived);
-        if (safeColumns.length === 0) return {};
-        return safeColumns.reduce((acc, column) => {
+        const visibleTasks = (tasks || []).filter(task => !task.archived);
+        if ((taskColumns || []).length === 0) return {};
+        return taskColumns.reduce((acc, column) => {
             acc[column.id] = { ...column, items: visibleTasks.filter(t => t.status === column.title) };
             return acc;
         }, {});
     }, [taskColumns, tasks]);
     
-    // Handlers
-    const handleOpenTaskModal = (task = null) => {
-        setEditingTask(task);
-        setTaskModalOpen(true);
-    };
+    const handleOpenTaskModal = (task = null) => { setEditingTask(task); setTaskModalOpen(true); };
 
     const handleDragEnd = async (item, targetColumnId) => {
         const targetColumn = taskColumns.find(c => c.id === targetColumnId);
         if (!targetColumn) return;
-
         let updateData = { status: targetColumn.title };
-
         if (targetColumn.isConclusion) {
             updateData.completedAt = serverTimestamp();
             logAction({ actionType: 'CONCLUSÃO', module: 'Tarefas', description: `concluiu a tarefa "${item.title}".` });
-            toast({ title: "Tarefa Concluída!", description: `"${item.title}" será arquivada em 2 dias.` });
         }
-        
         await updateTask(item.id, updateData);
     };
 
     const handleSaveTask = async (taskData) => {
         if (taskData.id) {
             await updateTask(taskData.id, taskData);
-            toast({ title: "Tarefa Atualizada", description: `"${taskData.title}" atualizada.` });
         } else {
-            const firstColumn = taskColumns.sort((a,b) => a.order - b.order)[0];
+            const firstColumn = (taskColumns || []).sort((a,b) => a.order - b.order)[0];
             const status = firstColumn ? firstColumn.title : 'Pendente';
             await addTask({ ...taskData, status, archived: false });
-            toast({ title: "Tarefa Adicionada", description: `"${taskData.title}" criada.` });
         }
         setTaskModalOpen(false);
     };
@@ -239,112 +208,52 @@ const TasksPage = () => {
         try {
             await confirm({ title: `Excluir Tarefa?`, description: `Tem certeza que deseja excluir "${task.title}"?` });
             await deleteTask(task.id, task.title);
-            toast({ title: "Tarefa Excluída!" });
         } catch (e) {}
     };
 
-    // ========================================================================
-    //          *** CORREÇÃO APLICADA AQUI ***
-    // ========================================================================
     const handleSaveColumns = async (updatedColumns) => {
         const batch = writeBatch(db);
         updatedColumns.forEach((col, index) => {
             const { id, ...data } = col;
             const docRef = id.startsWith('temp_') ? doc(collection(db, 'kanban_columns')) : doc(db, 'kanban_columns', id);
-            // Garantimos que o boardId correto seja salvo
             batch.set(docRef, { ...data, boardId: 'tasks', order: index }, { merge: true });
         });
-        try {
-            await batch.commit();
-            toast({ title: "Sucesso!", description: "Estrutura do quadro de tarefas foi salva." });
-            // A LINHA ABAIXO FOI ADICIONADA PARA FECHAR O MODAL
-            setManageColumnsModalOpen(false);
-        } catch (error) {
-            toast({ title: "Erro", description: "Não foi possível salvar as alterações.", variant: 'destructive' });
-        }
+        await batch.commit();
+        setManageColumnsModalOpen(false);
     };
     
     const isLoading = taskColumns === undefined;
 
     return (
         <div className="p-4 sm:p-6 lg:p-8">
-            <header className="flex justify-between items-center mb-6">
+            <motion.header 
+                className="flex justify-between items-center mb-6"
+                initial={{ opacity: 0, y: -20 }}
+                animate={{ opacity: 1, y: 0 }}
+            >
                 <h2 className="text-3xl font-bold text-gray-900 dark:text-white">Minhas Tarefas</h2>
                 <div className="flex gap-2">
-                    <Button onClick={() => setManageColumnsModalOpen(true)}>
-                        <PaletteIcon className="h-4 w-4 mr-2"/>Gerenciar Colunas
-                    </Button>
-                    <Button onClick={() => handleOpenTaskModal()} variant="violet">
-                        <PlusCircleIcon className="h-5 w-5 mr-2" />Nova Tarefa
-                    </Button>
+                    <Button onClick={() => setManageColumnsModalOpen(true)}><PaletteIcon className="h-4 w-4 mr-2"/>Gerenciar Colunas</Button>
+                    <Button onClick={() => handleOpenTaskModal()} variant="violet"><PlusCircleIcon className="h-5 w-5 mr-2" />Nova Tarefa</Button>
                 </div>
-            </header>
+            </motion.header>
             
             <main>
-                {isLoading ? (
-                    <div className="text-center p-8">Carregando quadro de tarefas...</div>
+                {isLoading ? ( <div className="text-center p-8">Carregando quadro de tarefas...</div>
                 ) : Array.isArray(taskColumns) && taskColumns.length === 0 ? (
-                    <GlassPanel className="p-8">
-                        <EmptyState
-                            title="Configure seu Quadro de Tarefas"
-                            message="Você ainda não criou nenhuma coluna. Clique em 'Gerenciar Colunas' para definir as etapas do seu fluxo (Ex: A Fazer, Em Andamento, Concluída)."
-                            actionText="Gerenciar Colunas"
-                            onAction={() => setManageColumnsModalOpen(true)}
-                            icon={<PaletteIcon className="w-12 h-12 mb-4 text-gray-400" />}
-                        />
-                    </GlassPanel>
-                ) : Array.isArray(tasks) && tasks.filter(t => !t.archived).length === 0 ? (
-                   <GlassPanel className="p-8">
-                        <EmptyState
-                            title="Nenhuma tarefa por aqui"
-                            message="Crie sua primeira tarefa para começar a se organizar."
-                            actionText="Criar Nova Tarefa"
-                            onAction={() => handleOpenTaskModal()}
-                            icon={<CheckSquareIcon className="w-12 h-12 mb-4 text-gray-400" />}
-                        />
-                    </GlassPanel>
+                    <GlassPanel className="p-8"><EmptyState title="Configure seu Quadro de Tarefas" message="Clique em 'Gerenciar Colunas' para definir as etapas do seu fluxo (Ex: A Fazer, Em Andamento, Concluída)." actionText="Gerenciar Colunas" onAction={() => setManageColumnsModalOpen(true)} icon={<PaletteIcon className="w-12 h-12 mb-4 text-gray-400" />} /></GlassPanel>
                 ) : (
                     <GlassPanel className="p-4">
                         <KanbanBoard columns={columnsForBoard} onDragEnd={handleDragEnd}>
-                            {(item) => <TaskCard 
-                                task={item} 
-                                onEdit={handleOpenTaskModal} 
-                                onDelete={handleDeleteTask} 
-                                onView={(task) => setViewingTask(task)}
-                                users={users}
-                                clients={clients}
-                                leads={leads}
-                            />}
+                            {(item) => <TaskCard task={item} onEdit={handleOpenTaskModal} onDelete={handleDeleteTask} onView={(task) => setViewingTask(task)} users={users} />}
                         </KanbanBoard>
                     </GlassPanel>
                 )}
             </main>
 
-            <TaskModal 
-                isOpen={isTaskModalOpen} 
-                onClose={() => setTaskModalOpen(false)} 
-                onSave={handleSaveTask} 
-                task={editingTask} 
-            />
-            
-            <ManageColumnsModal
-                isOpen={isManageColumnsModalOpen}
-                onClose={() => setManageColumnsModalOpen(false)}
-                onSave={handleSaveColumns}
-                columns={taskColumns}
-                boardId="tasks"
-                title="Gerenciar Colunas de Tarefas"
-                showConclusionButton={true}
-            />
-            
-            <TaskViewModal 
-                isOpen={!!viewingTask} 
-                onClose={() => setViewingTask(null)} 
-                task={viewingTask} 
-                users={users}
-                clients={clients}
-                leads={leads}
-            />
+            <TaskModal isOpen={isTaskModalOpen} onClose={() => setTaskModalOpen(false)} onSave={handleSaveTask} task={editingTask} users={users} clients={clients} leads={leads} />
+            <ManageColumnsModal isOpen={isManageColumnsModalOpen} onClose={() => setManageColumnsModalOpen(false)} onSave={handleSaveColumns} columns={taskColumns} boardId="tasks" title="Gerenciar Colunas de Tarefas" />
+            <TaskViewModal isOpen={!!viewingTask} onClose={() => setViewingTask(null)} task={viewingTask} users={users} clients={clients} leads={leads} />
         </div>
     );
 };

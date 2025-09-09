@@ -1,11 +1,14 @@
 import React, { useState, useEffect, useMemo } from 'react';
+// [CORREÇÃO DE CAMINHO]: Ajustado para subir um nível (de 'modals' para 'components')
 import Modal from '../Modal';
 import Label from '../Label';
 import Input from '../Input';
-import Select from '../Select';
+// [CORREÇÃO]: O caminho estava errado. Corrigido de '../components/Select' para '../Select'
+import { Select, SelectItem } from '../Select';
 import Button from '../Button';
 import DateField from '../DateField';
 import FormSection from '../forms/FormSection';
+// [CORREÇÃO DE CAMINHO]: Ajustado para subir dois níveis (de 'modals' para 'src')
 import { useToast } from '../../contexts/NotificationContext';
 import { maskCNPJ, maskCPF } from '../../utils';
 
@@ -27,7 +30,6 @@ const ProductionModal = ({ isOpen, onClose, onSave, production, users, partners,
         }
     }, [production, isOpen]);
     
-    // Função dedicada para fechar e limpar
     const handleClose = () => {
         setIsSaving(false);
         onClose();
@@ -38,7 +40,10 @@ const ProductionModal = ({ isOpen, onClose, onSave, production, users, partners,
         setFormData(p => ({ ...p, [name]: value }));
     };
 
-    // MELHORIA: Lógica de salvamento robusta
+    const handleSelectChange = (name, value) => {
+        setFormData(p => ({ ...p, [name]: value }));
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (isSaving) return;
@@ -51,7 +56,7 @@ const ProductionModal = ({ isOpen, onClose, onSave, production, users, partners,
         setIsSaving(true);
         try {
             await onSave(formData);
-            // O componente pai fecha o modal no sucesso
+            handleClose(); // Fecha o modal após salvar com sucesso
         } catch (error) {
             console.error("Falha ao salvar produção:", error);
             toast({ title: "Erro ao Salvar", description: "Não foi possível salvar os dados da produção.", variant: "destructive" });
@@ -65,7 +70,6 @@ const ProductionModal = ({ isOpen, onClose, onSave, production, users, partners,
     }, [partners]);
 
     return (
-        // Requisitos principais aplicados
         <Modal 
             isOpen={isOpen} 
             onClose={handleClose} 
@@ -89,10 +93,10 @@ const ProductionModal = ({ isOpen, onClose, onSave, production, users, partners,
                     </div>
                     <div className="col-span-full">
                         <Label htmlFor="prod-status">Status</Label>
-                        <Select id="prod-status" name="status" value={formData.status} onChange={handleChange} disabled={isSaving}>
-                            <option>Pendente</option>
-                            <option>Convertido em Cliente</option>
-                            <option>Cancelado</option>
+                        <Select id="prod-status" name="status" value={formData.status} onValueChange={(value) => handleSelectChange('status', value)} disabled={isSaving}>
+                            <SelectItem value="Pendente">Pendente</SelectItem>
+                            <SelectItem value="Convertido em Cliente">Convertido em Cliente</SelectItem>
+                            <SelectItem value="Cancelado">Cancelado</SelectItem>
                         </Select>
                     </div>
                 </FormSection>
@@ -100,9 +104,9 @@ const ProductionModal = ({ isOpen, onClose, onSave, production, users, partners,
                 <FormSection title="Valores e Responsáveis" cols={4}>
                     <div>
                         <Label htmlFor="prod-operator">Operadora (Comissão)</Label>
-                        <Select id="prod-operator" name="operator" value={formData.operator} onChange={handleChange} disabled={isSaving}>
-                            <option value="">Selecione...</option>
-                            {(operators || []).map(op => <option key={op.id} value={op.name}>{op.name}</option>)}
+                        <Select id="prod-operator" name="operator" value={formData.operator} onValueChange={(value) => handleSelectChange('operator', value)} disabled={isSaving}>
+                            <SelectItem value="">Selecione...</SelectItem>
+                            {(operators || []).map(op => <SelectItem key={op.id} value={op.name}>{op.name}</SelectItem>)}
                         </Select>
                     </div>
                     <div>
@@ -111,10 +115,10 @@ const ProductionModal = ({ isOpen, onClose, onSave, production, users, partners,
                     </div>
                     <div>
                         <Label htmlFor="prod-partner">Plataforma (Prêmio)</Label>
-                        <Select id="prod-partner" name="partner" value={formData.partner} onChange={handleChange} disabled={isSaving}>
-                            <option value="">Nenhuma</option>
-                            {deliveryPlatforms.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
-                            <option value="Outras">Outras</option>
+                        <Select id="prod-partner" name="partner" value={formData.partner} onValueChange={(value) => handleSelectChange('partner', value)} disabled={isSaving}>
+                            <SelectItem value="">Nenhuma</SelectItem>
+                            {deliveryPlatforms.map(p => <SelectItem key={p.id} value={p.name}>{p.name}</SelectItem>)}
+                            <SelectItem value="Outras">Outras</SelectItem>
                         </Select>
                     </div>
                     <div>
@@ -123,9 +127,9 @@ const ProductionModal = ({ isOpen, onClose, onSave, production, users, partners,
                     </div>
                     <div className="col-span-full">
                         <Label htmlFor="prod-broker">Corretor Responsável</Label>
-                        <Select id="prod-broker" name="brokerId" value={formData.brokerId} onChange={handleChange} required disabled={isSaving}>
-                            <option value="">Selecione...</option>
-                            {(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+                        <Select id="prod-broker" name="brokerId" value={formData.brokerId} onValueChange={(value) => handleSelectChange('brokerId', value)} required disabled={isSaving}>
+                            <SelectItem value="">Selecione...</SelectItem>
+                            {(users || []).map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}
                         </Select>
                     </div>
                 </FormSection>

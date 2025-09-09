@@ -1,18 +1,40 @@
-import React, { useState, createContext, useContext, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 
+// 1. Cria o Contexto
 const ThemeContext = createContext();
 
+// 2. Cria o Provedor do Contexto
 export const ThemeProvider = ({ children }) => {
-    const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
+    // Tenta pegar o tema do localStorage ou usa 'light' como padrão
+    const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'light');
 
+    // [IMPORTANTE] Este efeito aplica a classe ao HTML
     useEffect(() => {
-        document.documentElement.classList.remove('light', 'dark');
-        document.documentElement.classList.add(theme);
-        localStorage.setItem('theme', theme);
-    }, [theme]);
+        const root = window.document.documentElement; // Pega a tag <html>
 
-    const value = { theme, toggleTheme: () => setTheme(t => t === 'dark' ? 'light' : 'dark') };
-    return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
+        // Remove a classe antiga e adiciona a nova
+        root.classList.remove(theme === 'dark' ? 'light' : 'dark');
+        root.classList.add(theme);
+
+        // Salva a preferência no localStorage para persistir
+        localStorage.setItem('theme', theme);
+    }, [theme]); // Roda sempre que o estado 'theme' mudar
+
+    // Função para alternar entre os temas
+    const toggleTheme = () => {
+        setTheme(prevTheme => (prevTheme === 'light' ? 'dark' : 'light'));
+    };
+
+    const value = { theme, toggleTheme };
+
+    return (
+        <ThemeContext.Provider value={value}>
+            {children}
+        </ThemeContext.Provider>
+    );
 };
 
-export const useTheme = () => useContext(ThemeContext);
+// 3. Hook customizado para usar o contexto facilmente
+export const useTheme = () => {
+    return useContext(ThemeContext);
+};

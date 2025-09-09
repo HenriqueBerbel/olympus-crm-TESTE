@@ -5,17 +5,20 @@ import {
 } from "firebase/firestore";
 import { db } from '../firebase/firebase.js';
 import { useAuth } from './AuthContext.jsx';
+import { useToast } from './NotificationContext.jsx';
 import { FileTextIcon, CheckSquareIcon } from '../components/Icons';
 
 const DataContext = createContext(null);
 
 export const DataProvider = ({ children }) => {
     const { user } = useAuth();
+    const { toast } = useToast();
 
-    // --- ESTADOS ---
+    // --- ESTADOS (sem alteração) ---
     const [clients, setClients] = useState([]);
     const [leads, setLeads] = useState([]);
     const [tasks, setTasks] = useState([]);
+    // ... resto dos estados ...
     const [users, setUsers] = useState([]);
     const [roles, setRoles] = useState([]);
     const [timeline, setTimeline] = useState([]);
@@ -29,7 +32,7 @@ export const DataProvider = ({ children }) => {
     const [productions, setProductions] = useState([]);
     const [loading, setLoading] = useState(true);
     
-    // --- FUNÇÃO DE LOG ---
+    // --- FUNÇÃO DE LOG (sem alteração) ---
     const logAction = useCallback(async (logData) => {
         if (!db || !user) return;
         try {
@@ -43,8 +46,9 @@ export const DataProvider = ({ children }) => {
         } catch (error) { console.error("Erro ao registrar log:", error); }
     }, [user]);
 
-    // --- EFEITO PRINCIPAL PARA BUSCA DE DADOS ---
+    // --- EFEITO PRINCIPAL PARA BUSCA DE DADOS (sem alteração) ---
     useEffect(() => {
+        // ... (código existente sem alterações)
         if (!user || !db) {
             setLoading(false);
             const clearAllStates = [
@@ -89,13 +93,13 @@ export const DataProvider = ({ children }) => {
         return () => unsubscribes.forEach(unsub => unsub?.());
     }, [user]);
 
-    // --- GERAÇÃO DE EVENTOS PARA O CALENDÁRIO ---
+    // --- GERAÇÃO DE EVENTOS PARA O CALENDÁRIO (sem alteração) ---
     const actionableEvents = useMemo(() => {
+        // ... (código existente sem alterações)
         const events = [];
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
-        // **CORREÇÃO CRÍTICA APLICADA AQUI**
         if (clients) {
             clients.forEach(client => {
                 (client.contracts || []).forEach(contract => {
@@ -133,23 +137,22 @@ export const DataProvider = ({ children }) => {
         return events;
     }, [clients, tasks]);
 
-    // --- FUNÇÕES DE CRUD (Create, Read, Update, Delete) ---
-    // **MELHORIA ARQUITETURAL: "FÁBRICA" DE FUNÇÕES CRUD**
+    // --- FUNÇÕES DE CRUD ---
     const createCrudHandlers = (collectionName, singularName, moduleName, nameField = 'name') => {
         const getName = (data) => {
             if (typeof nameField === 'function') return nameField(data);
             return nameField.split('.').reduce((o, i) => o?.[i], data) || `item sem nome`;
         };
-
         const add = useCallback(async (data) => {
             if (!db || !user) throw new Error("Usuário não autenticado.");
-            let dataToSave = { ...data, ownerId: user.uid, createdAt: serverTimestamp() };
+            const dataToSave = { ...data, ownerId: user.uid, createdAt: serverTimestamp() };
             if(collectionName === 'leads') dataToSave.lastActivityDate = serverTimestamp();
             const docRef = await addDoc(collection(db, collectionName), dataToSave);
-            logAction({ actionType: 'CRIAÇÃO', module: moduleName, description: `criou o ${singularName} ${getName(dataToSave)}.` });
+            const itemName = getName(dataToSave);
+            logAction({ actionType: 'CRIAÇÃO', module: moduleName, description: `criou o ${singularName} ${itemName}.` });
+            toast({ title: `${singularName.charAt(0).toUpperCase() + singularName.slice(1)} Criado`, description: `O ${singularName} "${itemName}" foi criado com sucesso.` });
             return { id: docRef.id, ...dataToSave };
-        }, [user, logAction]);
-
+        }, [user, logAction, toast]);
         const update = useCallback(async (id, data) => {
             if (!db) throw new Error("Conexão com o banco de dados perdida.");
             let dataToUpdate = {...data};
@@ -159,30 +162,76 @@ export const DataProvider = ({ children }) => {
                 if (!existingTask?.completedAt) dataToUpdate.completedAt = serverTimestamp();
             }
             await updateDoc(doc(db, collectionName, id), dataToUpdate);
-            logAction({ actionType: 'EDIÇÃO', module: moduleName, description: `atualizou o ${singularName} ${getName(dataToUpdate)}.` });
+            const itemName = getName(dataToUpdate);
+            logAction({ actionType: 'EDIÇÃO', module: moduleName, description: `atualizou o ${singularName} ${itemName}.` });
+            toast({ title: `${singularName.charAt(0).toUpperCase() + singularName.slice(1)} Atualizado`, description: `As alterações em "${itemName}" foram salvas.` });
             return true;
-        }, [user, logAction, tasks]);
+        }, [user, logAction, tasks, toast]);
 
-        const remove = useCallback(async (id, itemName) => {
-            if (!db) throw new Error("Conexão com o banco de dados perdida.");
-            await deleteDoc(doc(db, collectionName, id));
-            logAction({ actionType: 'EXCLUSÃO', module: moduleName, description: `excluiu o ${singularName} ${itemName}.` });
-            return true;
-        }, [logAction]);
-
-        return { add, update, remove };
+        // A função 'remove' será tratada de forma otimista e separada
+        return { add, update };
     };
 
-    const { add: addClient, update: updateClient, remove: deleteClient } = createCrudHandlers('clients', 'cliente', 'Clientes', data => data.general?.companyName || data.general?.holderName);
-    const { add: addLead, update: updateLead, remove: deleteLead } = createCrudHandlers('leads', 'lead', 'Leads');
-    const { add: addTask, update: updateTask, remove: deleteTask } = createCrudHandlers('tasks', 'tarefa', 'Tarefas', 'title');
+    // [ALTERADO] As funções de exclusão foram removidas da fábrica para tratamento especial
+    const { add: addClient, update: updateClient } = createCrudHandlers('clients', 'cliente', 'Clientes', data => data.general?.companyName || data.general?.holderName);
+    const { add: addLead, update: updateLead } = createCrudHandlers('leads', 'lead', 'Leads');
+    const { add: addTask, update: updateTask } = createCrudHandlers('tasks', 'tarefa', 'Tarefas', 'title');
+    
+    // CRUDs mais simples que não precisam de UI Otimista por enquanto
     const { add: addOperator, update: updateOperator, remove: deleteOperator } = createCrudHandlers('operators', 'operadora', 'Corporativo');
     const { add: addPartner, update: updatePartner, remove: deletePartner } = createCrudHandlers('partners', 'parceiro', 'Corporativo');
     const { add: addProduction, update: updateProduction, remove: deleteProduction } = createCrudHandlers('productions', 'produção', 'Produção', 'clientName');
     const { add: addCommission, update: updateCommission, remove: deleteCommission } = createCrudHandlers('commissions', 'comissão', 'Comissões', 'clientName');
 
-    // --- FUNÇÕES ESPECÍFICAS (LÓGICA ORIGINAL RESTAURADA) ---
+    // [NOVO] Funções de exclusão com UI Otimista
+    const deleteClient = useCallback(async (clientId, clientName) => {
+        const originalClients = [...clients];
+        setClients(prev => prev.filter(c => c.id !== clientId)); // Atualização Otimista
+        try {
+            await deleteDoc(doc(db, "clients", clientId));
+            logAction({ actionType: 'EXCLUSÃO', module: 'Clientes', description: `excluiu o cliente ${clientName}.` });
+            toast({ title: "Cliente Excluído", description: `"${clientName}" foi removido com sucesso.` });
+            return true;
+        } catch (error) {
+            toast({ title: "Falha na Exclusão", description: `Não foi possível remover "${clientName}".`, variant: 'destructive' });
+            setClients(originalClients); // Rollback
+            return false;
+        }
+    }, [clients, logAction, toast]);
+
+    const deleteLead = useCallback(async (leadId, leadName) => {
+        const originalLeads = [...leads];
+        setLeads(prev => prev.filter(l => l.id !== leadId)); // Atualização Otimista
+        try {
+            await deleteDoc(doc(db, "leads", leadId));
+            logAction({ actionType: 'EXCLUSÃO', module: 'Leads', description: `excluiu o lead ${leadName}.` });
+            toast({ title: "Lead Excluído", description: `"${leadName}" foi removido com sucesso.` });
+            return true;
+        } catch (error) {
+            toast({ title: "Falha na Exclusão", description: `Não foi possível remover "${leadName}".`, variant: 'destructive' });
+            setLeads(originalLeads); // Rollback
+            return false;
+        }
+    }, [leads, logAction, toast]);
+
+    const deleteTask = useCallback(async (taskId, taskTitle) => {
+        const originalTasks = [...tasks];
+        setTasks(prev => prev.filter(t => t.id !== taskId)); // Atualização Otimista
+        try {
+            await deleteDoc(doc(db, "tasks", taskId));
+            logAction({ actionType: 'EXCLUSÃO', module: 'Tarefas', description: `excluiu a tarefa ${taskTitle}.` });
+            toast({ title: "Tarefa Excluída", description: `"${taskTitle}" foi removida com sucesso.` });
+            return true;
+        } catch (error) {
+            toast({ title: "Falha na Exclusão", description: `Não foi possível remover "${taskTitle}".`, variant: 'destructive' });
+            setTasks(originalTasks); // Rollback
+            return false;
+        }
+    }, [tasks, logAction, toast]);
+
+    // --- FUNÇÕES ESPECÍFICAS (sem alteração) ---
     const toggleEventCompletion = useCallback(async (event, isCompleted) => {
+        // ... (código existente sem alterações)
         if (!user) throw new Error("Usuário não autenticado.");
         const completedEventsRef = collection(db, "completed_events");
         if (isCompleted) {
@@ -191,39 +240,49 @@ export const DataProvider = ({ children }) => {
                 userId: user.uid,
                 completedAt: serverTimestamp(),
             });
+            logAction({ actionType: 'CONCLUSÃO', module: 'Calendário', description: `concluiu o evento: ${event.title}.` });
+            toast({ title: "Evento Concluído!", description: `"${event.title}" marcado como concluído.` });
         } else {
             const q = query(completedEventsRef, where("eventId", "==", event.id), where("userId", "==", user.uid));
             const snapshot = await getDocs(q);
             const batch = writeBatch(db);
             snapshot.forEach(doc => batch.delete(doc.ref));
             await batch.commit();
+            logAction({ actionType: 'REABERTURA', module: 'Calendário', description: `reabriu o evento: ${event.title}.` });
+            toast({ title: "Evento Reaberto", description: `"${event.title}" está pendente novamente.` });
         }
         return true;
-    }, [user]);
+    }, [user, logAction, toast]);
 
     const updateRole = useCallback(async (roleId, dataToUpdate) => {
+        // ... (código existente sem alterações)
         if (!db) throw new Error("Conexão com o banco de dados perdida.");
         const roleRef = doc(db, "roles", roleId);
         await updateDoc(roleRef, dataToUpdate);
         const roleName = roles.find(r => r.id === roleId)?.name || 'Desconhecido';
         logAction({ actionType: 'EDIÇÃO', module: 'Corporativo', description: `Atualizou as permissões do cargo ${roleName}.` });
+        toast({ title: "Cargo Atualizado", description: `As permissões de "${roleName}" foram salvas.` });
         return true;
-    }, [logAction, roles]);
+    }, [logAction, roles, toast]);
     
     const deleteKanbanColumn = useCallback(async (columnId) => {
+        // ... (código existente sem alterações)
         if (!db) throw new Error("Conexão com o banco de dados perdida.");
         await deleteDoc(doc(db, "kanban_columns", columnId));
         logAction({ actionType: 'EXCLUSÃO', module: 'Kanban', description: `Excluiu uma coluna do quadro.` });
+        toast({ title: "Coluna Removida", description: "A coluna do quadro Kanban foi removida." });
         return true;
-    }, [logAction]);
+    }, [logAction, toast]);
 
     const updateCompanyProfile = useCallback(async (data) => {
+        // ... (código existente sem alterações)
         if (!db) throw new Error("Conexão com o banco de dados perdida.");
         const profileRef = doc(db, "company_profile", "main");
         await setDoc(profileRef, data, { merge: true });
         logAction({ actionType: 'EDIÇÃO', module: 'Corporativo', description: 'Atualizou o perfil da empresa.' });
+        toast({ title: "Perfil Salvo", description: "As informações da empresa foram atualizadas." });
         return true;
-    }, [logAction]);
+    }, [logAction, toast]);
 
     // --- VALOR DO CONTEXTO ---
     const value = useMemo(() => ({
@@ -231,9 +290,9 @@ export const DataProvider = ({ children }) => {
         commissions, companyProfile, leadColumns, taskColumns, 
         completedEvents, partners, productions, actionableEvents,
         logAction, toggleEventCompletion, updateRole,
-        addClient, updateClient, deleteClient,
-        addLead, updateLead, deleteLead,
-        addTask, updateTask, deleteTask,
+        addClient, updateClient, deleteClient, // deleteClient agora é a versão otimista
+        addLead, updateLead, deleteLead,       // deleteLead agora é a versão otimista
+        addTask, updateTask, deleteTask,       // deleteTask agora é a versão otimista
         addOperator, updateOperator, deleteOperator,
         addPartner, updatePartner, deletePartner,
         addCommission, updateCommission, deleteCommission,

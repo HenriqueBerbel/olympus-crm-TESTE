@@ -2,10 +2,14 @@ import React, { useState, useEffect, useMemo } from 'react';
 import Modal from '../Modal';
 import Button from '../Button';
 import Label from '../Label';
-import Select from '../Select'; // Importado para o novo seletor de permissão
+import Input from '../Input'; // [CORREÇÃO]: Adicionada a importação do Input que estava faltando.
 import Avatar from '../Avatar';
 import { useToast } from '../../contexts/NotificationContext';
-import { XIcon, SearchIcon } from '../Icons'; // Supondo um ícone de busca
+import { XIcon, SearchIcon } from '../Icons';
+
+// [CORREÇÃO]: O import foi unificado. Ambos 'Select' e 'SelectItem'
+// são exportações NOMEADAS, então devem vir entre chaves {}.
+import { Select, SelectItem } from '/src/components/Select.jsx';
 
 const ShareModal = ({ isOpen, onClose, onSave, allUsers = [], documentData }) => {
     const { toast } = useToast();
@@ -42,22 +46,18 @@ const ShareModal = ({ isOpen, onClose, onSave, allUsers = [], documentData }) =>
         setSearchTerm('');
     };
 
-    // MELHORIA DE UX: Função única para gerenciar permissões
     const handlePermissionChange = (userId, newLevel) => {
-        // Remove o usuário de ambas as listas primeiro
         const newViewers = viewers.filter(id => id !== userId);
         const newEditors = editors.filter(id => id !== userId);
 
-        // Adiciona de volta à lista correta, se necessário
         if (newLevel === 'viewer') setViewers([...newViewers, userId]);
         if (newLevel === 'editor') setEditors([...newEditors, userId]);
-        if (newLevel === 'remove') { // Ação de remover
+        if (newLevel === 'remove') {
             setViewers(newViewers);
             setEditors(newEditors);
         }
     };
     
-    // MELHORIA: Lógica de salvamento robusta
     const handleSave = async () => {
         if (isSaving) return;
         setIsSaving(true);
@@ -66,7 +66,7 @@ const ShareModal = ({ isOpen, onClose, onSave, allUsers = [], documentData }) =>
                 accessControl: { viewers, editors }
             });
             toast({ title: "Sucesso!", description: "Permissões de compartilhamento atualizadas." });
-            onClose(); // Fecha apenas no sucesso
+            onClose(); 
         } catch (error) {
             console.error("Falha ao salvar permissões:", error);
             toast({ title: "Erro ao Salvar", description: "Não foi possível salvar as alterações.", variant: "destructive" });
@@ -93,10 +93,20 @@ const ShareModal = ({ isOpen, onClose, onSave, allUsers = [], documentData }) =>
                         <span className="text-xs text-gray-500">{user.email}</span>
                     </div>
                 </div>
-                <Select size="sm" value={level} onChange={(e) => handlePermissionChange(userId, e.target.value)} disabled={isSaving}>
-                    <option value="editor">Pode Editar</option>
-                    <option value="viewer">Pode Ver</option>
-                    <option value="remove">Remover Acesso</option>
+                
+                {/* [CORREÇÃO GERAL AQUI]:
+                  1. O componente <Select> baseado em Radix não aceita <option>. Ele espera <SelectItem>.
+                  2. A prop de mudança não é 'onChange', é 'onValueChange', e ela passa o valor direto (não o evento 'e').
+                  3. Removida a prop 'size="sm"' que não existe no seu componente customizado.
+                */}
+                <Select 
+                    value={level} 
+                    onValueChange={(newLevel) => handlePermissionChange(userId, newLevel)} 
+                    disabled={isSaving}
+                >
+                    <SelectItem value="editor">Pode Editar</SelectItem>
+                    <SelectItem value="viewer">Pode Ver</SelectItem>
+                    <SelectItem value="remove">Remover Acesso</SelectItem>
                 </Select>
             </div>
         );
@@ -143,7 +153,7 @@ const ShareModal = ({ isOpen, onClose, onSave, allUsers = [], documentData }) =>
                                 <span className="text-sm font-semibold text-gray-500 px-2">Proprietário</span>
                             </div>
                         )}
-                        {/* MELHORIA DE UI: Seções separadas para Editores e Leitores */}
+                        
                         {editors.length > 0 && <h4 className="text-xs font-bold uppercase text-gray-400 pt-2">Editores</h4>}
                         {editors.map(id => <UserAccessRow key={id} userId={id} level="editor" />)}
                         

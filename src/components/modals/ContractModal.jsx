@@ -1,16 +1,18 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useData } from '../../contexts/DataContext';
-import { useToast } from '../../contexts/NotificationContext';
-import { cn } from '../../utils';
-import Modal from '../Modal';
-import CredentialModal from './CredentialModal';
-import Label from '../Label';
-import Select from '../Select';
-import Input from '../Input';
-import Checkbox from '../Checkbox';
-import DateField from '../DateField';
-import Button from '../Button';
-import { PlusCircleIcon, PencilIcon, Trash2Icon, InfoIcon } from '../Icons';
+import { motion } from 'framer-motion';
+
+// Hooks, Utilitários e Componentes
+import { useData } from '/src/contexts/DataContext';
+import { useToast } from '/src/contexts/NotificationContext';
+import Modal from '/src/components/Modal';
+import CredentialModal from '/src/components/modals/CredentialModal';
+import Label from '/src/components/Label';
+import { Select, SelectItem } from '/src/components/Select';
+import Input from '/src/components/Input';
+import Checkbox from '/src/components/Checkbox';
+import DateField from '/src/components/DateField';
+import Button from '/src/components/Button';
+import { PlusCircleIcon, PencilIcon, Trash2Icon, InfoIcon } from '/src/components/Icons';
 
 const ContractModal = ({ isOpen, onClose, onSave, contract, clientType }) => {
     const { operators, users } = useData();
@@ -37,19 +39,25 @@ const ContractModal = ({ isOpen, onClose, onSave, contract, clientType }) => {
     }, [contract, isOpen]);
     
     const handleClose = () => {
-        setFormState(getInitialState());
-        setIsSaving(false);
         onClose();
     };
 
     const handleChange = (e) => {
-        const { name, value, type, checked } = e.target;
-        if (type === 'checkbox') {
-            const newTypes = checked ? [...(formState.planTypes || []), value] : (formState.planTypes || []).filter(v => v !== value);
-            setFormState(p => ({ ...p, planTypes: newTypes }));
-        } else {
-            setFormState(p => ({ ...p, [name]: value }));
-        }
+        const { name, value } = e.target;
+        setFormState(p => ({ ...p, [name]: value }));
+    };
+
+    const handleSelectChange = (name, value) => {
+        setFormState(p => ({ ...p, [name]: value }));
+    };
+
+    const handleCheckboxChange = (e) => {
+        const { value, checked } = e.target;
+        const currentTypes = formState.planTypes || [];
+        const newTypes = checked 
+            ? [...currentTypes, value] 
+            : currentTypes.filter(v => v !== value);
+        setFormState(p => ({ ...p, planTypes: newTypes }));
     };
 
     const handleSaveCredential = (credentialData) => {
@@ -73,12 +81,10 @@ const ContractModal = ({ isOpen, onClose, onSave, contract, clientType }) => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (isSaving) return;
-
         if (!formState.planOperator || !formState.contractValue || !formState.effectiveDate) {
             toast({ title: "Campos Obrigatórios", description: "Operadora, Valor do Contrato e Data da Vigência são obrigatórios.", variant: "destructive" });
             return;
         }
-
         setIsSaving(true);
         try {
             await onSave(formState);
@@ -90,50 +96,54 @@ const ContractModal = ({ isOpen, onClose, onSave, contract, clientType }) => {
         }
     };
 
-    // Componente auxiliar para títulos de seção
     const SectionTitle = ({ children }) => <h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80 col-span-full border-b border-gray-200 dark:border-white/10 pb-2 mb-2">{children}</h3>;
 
     return (
         <Modal isOpen={isOpen} onClose={handleClose} title={contract ? "Editar Contrato" : "Adicionar Novo Contrato"} size="6xl" closeOnClickOutside={false}>
-            <form onSubmit={handleSubmit} className="space-y-8">
-                {/* SEÇÃO 1: INFORMAÇÕES GERAIS */}
+            <motion.form 
+                onSubmit={handleSubmit} 
+                className="space-y-8"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 0.1 }}
+            >
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     <SectionTitle>Informações Gerais</SectionTitle>
-                    <div><Label htmlFor="planOperator">Plano Fechado (Operadora)</Label><Select id="planOperator" name="planOperator" value={formState.planOperator || ''} onChange={handleChange} disabled={isSaving} required><option value="">Selecione</option>{sortedOperators.map(op => <option key={op.id} value={op.name}>{op.name}</option>)}</Select></div>
-                    <div><Label htmlFor="proposalNumber">Número da Proposta</Label><Input id="proposalNumber" name="proposalNumber" value={formState.proposalNumber || ''} onChange={handleChange} disabled={isSaving}/></div>
-                    <div><Label htmlFor="policyNumber">Número da Apólice / Contrato</Label><Input id="policyNumber" name="policyNumber" value={formState.policyNumber || ''} onChange={handleChange} disabled={isSaving}/></div>
-                    <div><Label htmlFor="planCategory">Categoria do Plano</Label><Input id="planCategory" name="planCategory" value={formState.planCategory || ''} onChange={handleChange} disabled={isSaving} placeholder="Ex: Top Nacional"/></div>
-                    <div><Label htmlFor="accommodation">Acomodação</Label><Select id="accommodation" name="accommodation" value={formState.accommodation || ''} onChange={handleChange} disabled={isSaving}><option value="">Selecione...</option><option>Enfermaria</option><option>Apartamento</option></Select></div>
-                    <div><Label>Tipo de Plano</Label><div className="flex gap-6 mt-2 pt-2 text-gray-800 dark:text-gray-300"><label className="font-medium flex items-center gap-2 cursor-pointer"><Checkbox name="planTypes" value="Saúde" checked={(formState.planTypes || []).includes('Saúde')} onChange={handleChange} disabled={isSaving}/> Saúde</label><label className="font-medium flex items-center gap-2 cursor-pointer"><Checkbox name="planTypes" value="Dental" checked={(formState.planTypes || []).includes('Dental')} onChange={handleChange} disabled={isSaving}/> Dental</label></div></div>
+                    {/* [CORRIGIDO] Removido <SelectItem value=""> */}
+                    <div><Label>Plano Fechado (Operadora)</Label><Select required value={formState.planOperator || ''} onValueChange={v => handleSelectChange('planOperator', v)}>{sortedOperators.map(op => <SelectItem key={op.id} value={op.name}>{op.name}</SelectItem>)}</Select></div>
+                    <div><Label>Número da Proposta</Label><Input name="proposalNumber" value={formState.proposalNumber || ''} onChange={handleChange}/></div>
+                    <div><Label>Número da Apólice / Contrato</Label><Input name="policyNumber" value={formState.policyNumber || ''} onChange={handleChange}/></div>
+                    <div><Label>Categoria do Plano</Label><Input name="planCategory" value={formState.planCategory || ''} onChange={handleChange} placeholder="Ex: Top Nacional"/></div>
+                    {/* [CORRIGIDO] Removido <SelectItem value=""> */}
+                    <div><Label>Acomodação</Label><Select value={formState.accommodation || ''} onValueChange={v => handleSelectChange('accommodation', v)}><SelectItem value="Enfermaria">Enfermaria</SelectItem><SelectItem value="Apartamento">Apartamento</SelectItem></Select></div>
+                    <div><Label>Tipo de Plano</Label><div className="flex gap-6 mt-2 pt-2"><label className="flex items-center gap-2"><Checkbox value="Saúde" checked={(formState.planTypes || []).includes('Saúde')} onChange={handleCheckboxChange}/> Saúde</label><label className="flex items-center gap-2"><Checkbox value="Dental" checked={(formState.planTypes || []).includes('Dental')} onChange={handleCheckboxChange}/> Dental</label></div></div>
                 </div>
 
-                {/* SEÇÃO 2: VALORES E PAGAMENTO */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     <SectionTitle>Valores e Pagamento</SectionTitle>
-                    <div><Label htmlFor="contractValue">Valor do Contrato</Label><Input id="contractValue" type="number" name="contractValue" value={formState.contractValue || ''} onChange={handleChange} disabled={isSaving} required placeholder="Ex: 599.90"/></div>
-                    <div><Label htmlFor="feeValue">Valor da Taxa</Label><Input id="feeValue" type="number" name="feeValue" value={formState.feeValue || ''} onChange={handleChange} disabled={isSaving} placeholder="Ex: 50.00"/></div>
-                    <div><Label htmlFor="paymentMethod">Forma de Pagamento</Label><Select id="paymentMethod" name="paymentMethod" value={formState.paymentMethod || ''} onChange={handleChange} disabled={isSaving}><option value="">Selecione...</option><option>Boleto</option><option>Cartão de Crédito</option><option>Débito Automático</option><option>Pix</option></Select></div>
+                    <div><Label>Valor do Contrato</Label><Input type="number" name="contractValue" value={formState.contractValue || ''} onChange={handleChange} required placeholder="Ex: 599.90"/></div>
+                    <div><Label>Valor da Taxa</Label><Input type="number" name="feeValue" value={formState.feeValue || ''} onChange={handleChange} placeholder="Ex: 50.00"/></div>
+                    {/* [CORRIGIDO] Removido <SelectItem value=""> */}
+                    <div><Label>Forma de Pagamento</Label><Select value={formState.paymentMethod || ''} onValueChange={v => handleSelectChange('paymentMethod', v)}><SelectItem value="Boleto">Boleto</SelectItem><SelectItem value="Cartão de Crédito">Cartão de Crédito</SelectItem><SelectItem value="Débito Automático">Débito Automático</SelectItem><SelectItem value="Pix">Pix</SelectItem></Select></div>
                 </div>
 
-                {/* SEÇÃO 3: DATAS E PRAZOS */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     <SectionTitle>Datas e Prazos</SectionTitle>
-                    <div><Label htmlFor="effectiveDate">Data da Vigência</Label><DateField id="effectiveDate" name="effectiveDate" value={formState.effectiveDate || ''} onChange={handleChange} disabled={isSaving} required/></div>
-                    <div><Label htmlFor="monthlyDueDate">Vencimento Mensal (Dia)</Label><Input id="monthlyDueDate" type="number" name="monthlyDueDate" value={formState.monthlyDueDate || ''} onChange={handleChange} disabled={isSaving} placeholder="Ex: 10"/></div>
-                    <div><Label htmlFor="boletoSentDate">Data Envio do Boleto (Dia)</Label><DateField id="boletoSentDate" name="boletoSentDate" value={formState.boletoSentDate || ''} onChange={handleChange} disabled={isSaving} placeholder="Dia do mês"/></div>
-                    <div><Label htmlFor="renewalDate">Renovação de Contrato</Label><DateField id="renewalDate" name="renewalDate" value={formState.renewalDate || ''} onChange={handleChange} disabled={isSaving}/></div>
+                    <div><Label>Data da Vigência</Label><DateField name="effectiveDate" value={formState.effectiveDate || ''} onChange={handleChange} required/></div>
+                    <div><Label>Vencimento Mensal (Dia)</Label><Input type="number" name="monthlyDueDate" value={formState.monthlyDueDate || ''} onChange={handleChange} placeholder="Ex: 10"/></div>
+                    <div><Label>Data Envio do Boleto (Dia)</Label><DateField name="boletoSentDate" value={formState.boletoSentDate || ''} onChange={handleChange} placeholder="Dia do mês"/></div>
+                    <div><Label>Renovação de Contrato</Label><DateField name="renewalDate" value={formState.renewalDate || ''} onChange={handleChange}/></div>
                 </div>
 
-                {/* SEÇÃO 4: OUTRAS INFORMAÇÕES */}
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     <SectionTitle>Outras Informações</SectionTitle>
-                    <div><Label htmlFor="status">Status</Label><Select id="status" name="status" value={formState.status || 'ativo'} onChange={handleChange} disabled={isSaving}><option value="ativo">Ativo</option><option value="inativo">Inativo (Histórico)</option></Select></div>
-                    <div><Label htmlFor="previousPlan">Plano Anterior (se houver)</Label><Input id="previousPlan" name="previousPlan" value={formState.previousPlan || ''} onChange={handleChange} disabled={isSaving}/></div>
-                    <div><Label htmlFor="boletoResponsibleId">Responsável pelo Boleto</Label><Select id="boletoResponsibleId" name="boletoResponsibleId" value={formState.boletoResponsibleId || ''} onChange={handleChange} disabled={isSaving}><option value="">Selecione...</option>{(users || []).map(u => <option key={u.id} value={u.id}>{u.name}</option>)}</Select></div>
+                    <div><Label>Status</Label><Select value={formState.status || 'ativo'} onValueChange={v => handleSelectChange('status', v)}><SelectItem value="ativo">Ativo</SelectItem><SelectItem value="inativo">Inativo (Histórico)</SelectItem></Select></div>
+                    <div><Label>Plano Anterior (se houver)</Label><Input name="previousPlan" value={formState.previousPlan || ''} onChange={handleChange}/></div>
+                    {/* [CORRIGIDO] Removido <SelectItem value=""> */}
+                    <div><Label>Responsável pelo Boleto</Label><Select value={formState.boletoResponsibleId || ''} onValueChange={v => handleSelectChange('boletoResponsibleId', v)}>{(users || []).map(u => <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>)}</Select></div>
                     <div><Label>Tipo de Cliente (Informativo)</Label><p className="h-10 flex items-center gap-2 px-3 text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-black/20 rounded-lg text-sm"><InfoIcon className="h-4 w-4"/>{clientType || 'Não definido'}</p></div>
                 </div>
 
-                {/* SEÇÃO 5: CREDENCIAIS */}
                 <div className="border-t border-gray-200 dark:border-white/10 pt-6">
                     <div className="flex justify-between items-center mb-4">
                         <h3 className="text-lg font-semibold text-cyan-600 dark:text-cyan-400/80">Credenciais</h3>
@@ -152,11 +162,15 @@ const ContractModal = ({ isOpen, onClose, onSave, contract, clientType }) => {
                     </div>
                 </div>
 
-                <div className="flex justify-end gap-4 pt-6 border-t border-gray-200 dark:border-white/10"><Button type="button" variant="outline" onClick={handleClose} disabled={isSaving}>Cancelar</Button><Button type="submit" disabled={isSaving}>{isSaving ? 'Salvando...' : 'Salvar Contrato'}</Button></div>
-            </form>
+                <div className="flex justify-end gap-4 pt-6 border-t border-gray-200 dark:border-white/10">
+                    <Button type="button" variant="outline" onClick={handleClose} disabled={isSaving}>Cancelar</Button>
+                    <Button type="submit" disabled={isSaving}>{isSaving ? 'Salvando...' : 'Salvar Contrato'}</Button>
+                </div>
+            </motion.form>
             <CredentialModal isOpen={isCredentialModalOpen} onClose={() => setCredentialModalOpen(false)} onSave={handleSaveCredential} credential={editingCredential} />
         </Modal>
     );
 };
 
 export default ContractModal;
+

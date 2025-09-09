@@ -1,5 +1,6 @@
 import React, { useState, useMemo, memo } from 'react';
 import { getFirestore, collection, doc, writeBatch, serverTimestamp } from "firebase/firestore";
+import { motion } from 'framer-motion';
 
 // Hooks e Contextos
 import { useData } from '../contexts/DataContext';
@@ -25,6 +26,36 @@ import ShareModal from '../components/modals/ShareModal';
 import { ArchiveIcon, PaletteIcon, PlusCircleIcon, PencilIcon, Trash2Icon, ZapIcon, Share2Icon } from '../components/Icons';
 
 // =============================================================================
+// VARIANTES DE ANIMAÇÃO (Receitas para as Animações)
+// =============================================================================
+const boardVariants = {
+    hidden: { opacity: 0 },
+    visible: {
+        opacity: 1,
+        transition: {
+            staggerChildren: 0.1,
+        },
+    },
+};
+
+const columnVariants = {
+    hidden: { opacity: 0, y: 30 },
+    visible: {
+        opacity: 1,
+        y: 0,
+        transition: {
+            staggerChildren: 0.07,
+        },
+    },
+};
+
+const cardVariants = {
+    hidden: { opacity: 0, scale: 0.9 },
+    visible: { opacity: 1, scale: 1, transition: { duration: 0.3 } },
+};
+
+
+// =============================================================================
 // SUBCOMPONENTES
 // =============================================================================
 
@@ -41,7 +72,7 @@ const ArchivedLeadsModal = memo(({ isOpen, onClose, allLeads, onUnarchive }) => 
             <div className="max-h-[60vh] overflow-y-auto">
                 {archivedLeads.length > 0 ? (
                     <table className="min-w-full">
-                        <thead className="border-b border-gray-200 dark:border-white/10">
+                         <thead className="border-b border-gray-200 dark:border-white/10">
                             <tr>
                                 <th className="px-4 py-3 text-left text-sm font-semibold text-gray-500 dark:text-gray-300">Nome do Lead</th>
                                 <th className="px-4 py-3 text-left text-sm font-semibold text-gray-500 dark:text-gray-300">Empresa</th>
@@ -74,17 +105,19 @@ const ArchivedLeadsModal = memo(({ isOpen, onClose, allLeads, onUnarchive }) => 
 });
 
 const LeadCard = memo(({ lead, onEdit, onDelete, onShare }) => (
-    <GlassPanel className="p-3 cursor-grab active:cursor-grabbing group">
-        <div className="flex justify-between items-start">
-            <p className="font-semibold text-sm text-gray-900 dark:text-white flex-grow truncate" title={lead.name}>{lead.name}</p>
-            <div className="flex opacity-0 group-hover:opacity-100 transition-opacity">
-                <Button variant="ghost" size="icon" className="h-7 w-7" title="Compartilhar" onClick={() => onShare(lead)}><Share2Icon className="h-4 w-4" /></Button>
-                <Button variant="ghost" size="icon" className="h-7 w-7" title="Editar" onClick={() => onEdit(lead)}><PencilIcon className="h-4 w-4" /></Button>
-                <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500/70" title="Excluir" onClick={() => onDelete(lead)}><Trash2Icon className="h-4 w-4" /></Button>
+    <motion.div whileHover={{ scale: 1.03, zIndex: 10 }} whileTap={{ scale: 0.98 }}>
+        <GlassPanel className="p-3 cursor-grab active:cursor-grabbing group">
+            <div className="flex justify-between items-start">
+                <p className="font-semibold text-sm text-gray-900 dark:text-white flex-grow truncate" title={lead.name}>{lead.name}</p>
+                <div className="flex opacity-0 group-hover:opacity-100 transition-opacity">
+                    <Button variant="ghost" size="icon" className="h-7 w-7" title="Compartilhar" onClick={() => onShare(lead)}><Share2Icon className="h-4 w-4" /></Button>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" title="Editar" onClick={() => onEdit(lead)}><PencilIcon className="h-4 w-4" /></Button>
+                    <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500/70" title="Excluir" onClick={() => onDelete(lead)}><Trash2Icon className="h-4 w-4" /></Button>
+                </div>
             </div>
-        </div>
-        <p className="text-xs text-gray-500 dark:text-gray-400">{lead.company || 'Sem empresa'}</p>
-    </GlassPanel>
+            <p className="text-xs text-gray-500 dark:text-gray-400">{lead.company || 'Sem empresa'}</p>
+        </GlassPanel>
+    </motion.div>
 ));
 
 const KanbanBoard = memo(({ columns, onDragEnd, children }) => {
@@ -96,12 +129,7 @@ const KanbanBoard = memo(({ columns, onDragEnd, children }) => {
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData('text/plain', item.id);
     };
-
-    const handleDragOver = (e, columnId) => {
-        e.preventDefault();
-        setDragOverColumn(columnId);
-    };
-
+    const handleDragOver = (e, columnId) => { e.preventDefault(); setDragOverColumn(columnId); };
     const handleDrop = (e, targetColumnId) => {
         e.preventDefault();
         if (draggedItem && draggedItem.sourceColumnId !== targetColumnId) {
@@ -110,10 +138,7 @@ const KanbanBoard = memo(({ columns, onDragEnd, children }) => {
         setDraggedItem(null);
         setDragOverColumn(null);
     };
-
-    const handleDragLeave = () => {
-        setDragOverColumn(null);
-    };
+    const handleDragLeave = () => { setDragOverColumn(null); };
 
     const sortedColumns = useMemo(() =>
         Object.values(columns || {}).sort((a, b) => a.order - b.order),
@@ -121,10 +146,11 @@ const KanbanBoard = memo(({ columns, onDragEnd, children }) => {
     );
 
     return (
-        <div className="flex gap-6 overflow-x-auto p-2">
+        <motion.div className="flex gap-6 overflow-x-auto p-2" variants={boardVariants} initial="hidden" animate="visible">
             {sortedColumns.map((column) => (
-                <div
+                <motion.div
                     key={column.id}
+                    variants={columnVariants}
                     className={cn("w-80 flex-shrink-0 flex flex-col rounded-xl transition-colors duration-300", dragOverColumn === column.id ? 'bg-gray-200/50 dark:bg-white/10' : '')}
                     onDragOver={(e) => handleDragOver(e, column.id)}
                     onDrop={(e) => handleDrop(e, column.id)}
@@ -136,25 +162,34 @@ const KanbanBoard = memo(({ columns, onDragEnd, children }) => {
                     </div>
                     <div className="p-2 space-y-3 overflow-y-auto min-h-[200px]">
                         {column.items.length > 0 ? (
-                            column.items.map(item => (<div key={item.id} draggable onDragStart={(e) => handleDragStart(e, item, column.id)}>{typeof children === 'function' && children(item)}</div>))
+                            column.items.map(item => (
+                                <motion.div
+                                    key={item.id}
+                                    layout
+                                    variants={cardVariants}
+                                    draggable
+                                    onDragStart={(e) => handleDragStart(e, item, column.id)}
+                                >
+                                    {typeof children === 'function' && children(item)}
+                                </motion.div>
+                            ))
                         ) : (
                             <div className="text-center text-sm text-gray-500 dark:text-gray-400 p-4">Nenhum lead aqui.</div>
                         )}
                     </div>
-                </div>
+                </motion.div>
             ))}
-        </div>
+        </motion.div>
     );
 });
+
 
 // =============================================================================
 // COMPONENTE PRINCIPAL DA PÁGINA
 // =============================================================================
-
 const LeadsPage = ({ onNavigate }) => {
     // Hooks
     const { leads, users, updateLead, addLead, deleteLead, leadColumns } = useData();
-    const { user: currentUser } = useAuth();
     const { toast } = useToast();
     const confirm = useConfirm();
     const db = getFirestore();
@@ -171,7 +206,6 @@ const LeadsPage = ({ onNavigate }) => {
         const safeLeadColumns = Array.isArray(leadColumns) ? leadColumns : [];
         const safeLeads = Array.isArray(leads) ? leads : [];
         const visibleLeads = safeLeads.filter(lead => !lead.archived);
-
         return safeLeadColumns.reduce((acc, column) => {
             acc[column.id] = { ...column, items: visibleLeads.filter(l => l.status === column.title) };
             return acc;
@@ -187,14 +221,12 @@ const LeadsPage = ({ onNavigate }) => {
             } else if (targetColumn.isArchiveColumn) {
                 await confirm({ title: `Arquivar Lead?`, description: `"${item.name}" será removido do funil, mas poderá ser restaurado.` });
                 await updateLead(item.id, { ...item, archived: true, status: targetColumn.title, archivedAt: serverTimestamp() });
-                toast({ title: "Lead Arquivado", description: `${item.name} foi movido para o arquivo.` });
             } else {
                 const newStatus = targetColumn.title;
                 await updateLead(item.id, { ...item, status: newStatus });
-                toast({ title: "Lead Atualizado", description: `${item.name} movido para "${newStatus}".` });
             }
         } catch (error) {
-            if (error) { toast({ title: "Erro ao mover lead", description: error.message, variant: 'destructive' }); }
+            if (error) { console.log("Ação de arrastar cancelada ou falhou."); }
         }
     };
     
@@ -222,7 +254,6 @@ const LeadsPage = ({ onNavigate }) => {
             return;
         }
         await updateLead(leadId, { archived: false, archivedAt: null, status: firstColumn.title });
-        toast({ title: "Lead Restaurado!", description: "O lead voltou para a primeira coluna do funil." });
     };
 
     const handleOpenLeadModal = (lead = null) => {
@@ -230,29 +261,16 @@ const LeadsPage = ({ onNavigate }) => {
         setLeadModalOpen(true);
     };
 
-    // [CORREÇÃO APLICADA AQUI]
     const handleDeleteLead = async (lead) => {
         try {
-            // A promise do confirm() vai REJEITAR se o usuário clicar em "Cancelar"
             await confirm({
                 title: `Excluir o lead ${lead.name}?`,
                 description: "Esta ação é permanente e não pode ser desfeita.",
                 confirmText: "Sim, Excluir",
                 cancelText: "Cancelar"
             });
-
-            // Se o código chegar aqui, o usuário clicou em "Confirmar"
-            const success = await deleteLead(lead.id, lead.name);
-
-            if (success) {
-                toast({ title: "Lead Excluído!", description: `"${lead.name}" foi removido com sucesso.` });
-            } else {
-                // Isso acontece se deleteLead no DataContext retornar false (ex: por uma regra de segurança)
-                toast({ title: "Erro ao Excluir", description: "Não foi possível remover o lead. Verifique as permissões.", variant: 'destructive' });
-            }
+            await deleteLead(lead.id, lead.name);
         } catch (rejection) {
-            // Entra no catch quando o usuário clica em "Cancelar" no diálogo de confirmação.
-            // O importante é NÃO mostrar uma mensagem de erro aqui. Apenas logamos para debug.
             console.log("Ação de exclusão cancelada pelo usuário.");
         }
     };
@@ -261,12 +279,10 @@ const LeadsPage = ({ onNavigate }) => {
         try {
             if (leadData.id) {
                 await updateLead(leadData.id, leadData);
-                toast({ title: "Lead Atualizado", description: `${leadData.name} foi atualizado.` });
             } else {
                 const firstColumn = (leadColumns || []).sort((a, b) => a.order - b.order)[0];
                 const status = firstColumn ? firstColumn.title : 'Novo';
                 await addLead({ ...leadData, status, archived: false });
-                toast({ title: "Lead Adicionado", description: `${leadData.name} foi adicionado.` });
             }
             setLeadModalOpen(false);
         } catch (error) {
@@ -279,21 +295,16 @@ const LeadsPage = ({ onNavigate }) => {
         setShareModalOpen(true);
     };
 
-    const handleSaveShare = async (leadId, data) => {
-        const success = await updateLead(leadId, data);
-        if(success) {
-            toast({ title: "Acesso atualizado!", description: "As permissões de compartilhamento foram salvas." });
-        } else {
-            toast({ title: "Erro!", description: "Não foi possível salvar as permissões.", variant: "destructive" });
-        }
-    };
+    const handleSaveShare = async (leadId, data) => { await updateLead(leadId, data); };
     
     const isLoading = leadColumns === undefined;
     
     return (
         <div className="p-4 sm:p-6 lg:p-8">
             <header className="flex flex-wrap justify-between items-center mb-6 gap-4">
-                <h2 className="text-3xl font-bold text-gray-900 dark:text-white">Funil de Leads</h2>
+                <motion.h2 className="text-3xl font-bold text-gray-900 dark:text-white" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}>
+                    Funil de Leads
+                </motion.h2>
                 <div className="flex flex-wrap gap-2">
                     <Button onClick={() => setManageColumnsModalOpen(true)}><PaletteIcon className="h-4 w-4 mr-2"/>Gerenciar Colunas</Button>
                     <Button variant="outline" onClick={() => setArchiveModalOpen(true)}><ArchiveIcon className="h-4 w-4 mr-2"/>Ver Arquivados</Button>
@@ -316,16 +327,9 @@ const LeadsPage = ({ onNavigate }) => {
                             onAction={() => setManageColumnsModalOpen(true)}
                         />
                     </GlassPanel>
-                ) : Array.isArray(leads) && leads.filter(l => !l.archived).length === 0 ? (
-                    <GlassPanel className="p-8">
-                        <EmptyState
-                            title="Seu funil está vazio"
-                            message="Adicione seu primeiro lead para começar a visualizar suas oportunidades de negócio aqui."
-                            icon={<ZapIcon className="w-12 h-12 mb-4 text-gray-400" />}
-                            actionText="Adicionar Novo Lead"
-                            onAction={() => handleOpenLeadModal()}
-                        />
-                    </GlassPanel>
+                // [LÓGICA DE EXIBIÇÃO CORRIGIDA]
+                // Removemos a verificação de leads vazios daqui.
+                // Se houver colunas, o KanbanBoard será renderizado, e ele mesmo tratará colunas vazias.
                 ) : (
                     <GlassPanel className="p-4">
                         <KanbanBoard columns={columnsForBoard} onDragEnd={handleDragEnd}>
@@ -354,7 +358,6 @@ const LeadsPage = ({ onNavigate }) => {
                 columns={leadColumns || []}
                 boardId="leads"
                 title="Gerenciar Colunas do Funil"
-                showConversionButton={true}
             />
             <ArchivedLeadsModal
                 isOpen={isArchiveModalOpen}

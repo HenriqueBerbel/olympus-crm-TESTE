@@ -1,11 +1,20 @@
 import React, { useState, useEffect } from 'react';
 import { getFirestore, doc, getDoc } from "firebase/firestore";
+import { motion, AnimatePresence } from 'framer-motion';
+
+// Hooks
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../contexts/NotificationContext';
+
+// Componentes
 import Label from '../components/Label';
 import Input from '../components/Input';
 import Button from '../components/Button';
-import { LogInIcon } from '../components/Icons';
+import { LogInIcon, EyeIcon, EyeOffIcon } from '../components/Icons';
+
+// ========================================================================
+//          *** PÁGINA DE LOGIN REFINADA ***
+// ========================================================================
 
 const LoginPage = () => {
     const { login } = useAuth();
@@ -14,9 +23,10 @@ const LoginPage = () => {
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
     const [logoUrl, setLogoUrl] = useState(null);
+    const [showPassword, setShowPassword] = useState(false); // [UX] Estado para mostrar/ocultar senha
     const db = getFirestore();
 
-    // Efeito para buscar a URL do logo ao carregar a página
+    // Efeito para buscar a URL do logo (sem alterações)
     useEffect(() => {
         const fetchCompanyProfile = async () => {
             try {
@@ -30,8 +40,8 @@ const LoginPage = () => {
         };
         fetchCompanyProfile();
     }, [db]);
-
-    // Função para traduzir os erros do Firebase
+    
+    // Função para traduzir erros do Firebase (sem alterações)
     const getFirebaseErrorMessage = (errorCode) => {
         switch (errorCode) {
             case 'auth/invalid-email':
@@ -45,7 +55,7 @@ const LoginPage = () => {
         }
     };
 
-    // Função para submeter o formulário de login
+    // Submissão do formulário (sem alterações na lógica)
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (!email || !password) {
@@ -57,73 +67,120 @@ const LoginPage = () => {
         if (!result.success) {
             const message = getFirebaseErrorMessage(result.code);
             toast({ title: "Falha na Autenticação", description: message, variant: "destructive" });
-            setLoading(false); // Só desativa o loading se houver erro
+            setLoading(false);
         }
-        // Se o login for bem-sucedido, o App.jsx vai redirecionar, então não precisa desativar o loading
+    };
+
+    // Variantes de Animação
+    const panelVariants = {
+        hidden: { opacity: 0, y: 50, scale: 0.95 },
+        visible: { 
+            opacity: 1, 
+            y: 0, 
+            scale: 1,
+            transition: { duration: 0.6, ease: [0.16, 1, 0.3, 1], staggerChildren: 0.1 }
+        }
+    };
+
+    const itemVariants = {
+        hidden: { opacity: 0, y: 20 },
+        visible: { opacity: 1, y: 0, transition: { duration: 0.5, ease: "easeOut" } }
     };
 
     return (
         <div 
-            className="min-h-screen flex flex-col items-center justify-center p-4 bg-cover bg-center"
+            className="min-h-screen flex items-center justify-center p-4 bg-cover bg-center"
             style={{ backgroundImage: 'url(https://images.unsplash.com/photo-1556740738-b6a63e27c4df?q=80&w=2070&auto=format&fit=crop)' }}
         >
             <div className="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
-            <div className="relative z-10 w-full max-w-md">
-                <div className="bg-white/10 dark:bg-black/30 backdrop-blur-lg p-8 md:p-10 rounded-2xl border border-white/20 shadow-2xl">
-                    <div className="text-center mb-8">
+            
+            <motion.div 
+                className="relative z-10 w-full max-w-md"
+                variants={panelVariants}
+                initial="hidden"
+                animate="visible"
+            >
+                <div className="bg-white/10 dark:bg-black/30 backdrop-blur-xl p-8 md:p-10 rounded-2xl border border-white/20 shadow-2xl">
+                    <motion.div variants={itemVariants} className="text-center mb-8">
                         {logoUrl && (
                             <img 
                                 src={logoUrl} 
                                 alt="Logo da Empresa" 
                                 className="mx-auto h-16 w-auto mb-4 object-contain"
-                                // Esconde a imagem se ela não carregar, para não mostrar um ícone quebrado
                                 onError={(e) => { e.currentTarget.style.display = 'none'; }}
                             />
                         )}
-                        <h1 className="text-4xl font-bold text-white">OLYMPUS X</h1>
+                        <h1 className="text-4xl font-bold text-white tracking-tight">OLYMPUS X</h1>
                         <p className="text-gray-300 mt-2">Acesso ao Ecossistema de Gestão</p>
-                    </div>
+                    </motion.div>
+                    
                     <form onSubmit={handleSubmit} className="space-y-6">
-                        <div>
+                        <motion.div variants={itemVariants}>
                             <Label htmlFor="email" className="text-gray-200">Email</Label>
                             <Input 
-                                id="email" 
-                                type="email" 
-                                value={email} 
-                                onChange={(e) => setEmail(e.target.value)} 
-                                required 
-                                className="mt-2"
-                                placeholder="seu@email.com"
+                                id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} 
+                                required className="mt-2" placeholder="seu@email.com"
                             />
-                        </div>
-                        <div>
+                        </motion.div>
+                        
+                        <motion.div variants={itemVariants}>
                             <Label htmlFor="password" className="text-gray-200">Senha</Label>
-                            <Input 
-                                id="password" 
-                                type="password" 
-                                value={password} 
-                                onChange={(e) => setPassword(e.target.value)} 
-                                required 
-                                className="mt-2"
-                                placeholder="••••••••"
-                            />
-                        </div>
-                        <Button type="submit" className="w-full !h-12 !text-base font-semibold" disabled={loading}>
-                            {loading ? (
-                                <span className="animate-pulse">Autenticando...</span>
-                            ) : (
-                                <>
-                                    <LogInIcon className="h-5 w-5 mr-2" />
-                                    Entrar
-                                </>
-                            )}
-                        </Button>
+                            {/* [UX] Input de senha com botão de mostrar/ocultar */}
+                            <div className="relative mt-2">
+                                <Input 
+                                    id="password" 
+                                    type={showPassword ? "text" : "password"} 
+                                    value={password} 
+                                    onChange={(e) => setPassword(e.target.value)} 
+                                    required
+                                    placeholder="••••••••"
+                                    className="pr-10"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => setShowPassword(!showPassword)}
+                                    className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-white"
+                                    aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}
+                                >
+                                    {showPassword ? <EyeOffIcon className="h-5 w-5" /> : <EyeIcon className="h-5 w-5" />}
+                                </button>
+                            </div>
+                        </motion.div>
+
+                        <motion.div variants={itemVariants}>
+                            <Button 
+                                type="submit" 
+                                className="w-full !h-12 !text-base font-semibold" 
+                                disabled={loading}
+                                as={motion.button} // Permite animar o botão
+                                whileHover={{ scale: 1.03 }}
+                                whileTap={{ scale: 0.98 }}
+                            >
+                                <AnimatePresence mode="wait">
+                                    {loading ? (
+                                        <motion.span
+                                            key="loading"
+                                            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                                            className="animate-pulse"
+                                        >
+                                            Autenticando...
+                                        </motion.span>
+                                    ) : (
+                                        <motion.span key="login" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex items-center justify-center">
+                                            <LogInIcon className="h-5 w-5 mr-2" />
+                                            Entrar
+                                        </motion.span>
+                                    )}
+                                </AnimatePresence>
+                            </Button>
+                        </motion.div>
                     </form>
                 </div>
-                 <p className="text-center text-xs text-gray-400 mt-6">
-                    © 2025 Olympus X CRM. Todos os direitos reservados.
-                </p>
-            </div>
+                
+                <motion.p variants={itemVariants} className="text-center text-xs text-gray-400 mt-8">
+                    © {new Date().getFullYear()} Olympus X CRM. Todos os direitos reservados.
+                </motion.p>
+            </motion.div>
         </div>
     );
 };

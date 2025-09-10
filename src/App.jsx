@@ -82,12 +82,24 @@ function MainApp() {
     return (
         <div className="min-h-screen bg-gray-50 dark:bg-[#0D1117] text-gray-800 dark:text-gray-200 font-sans">
             <Sidebar isSidebarOpen={isSidebarOpen} />
-            <div className="lg:pl-64 transition-all duration-300">
+            {/* // =======================================================
+              // CORREÇÃO APLICADA AQUI (PARTE 1)
+              // 'flex flex-col h-screen' garante que este container ocupe a altura toda da tela
+              // e organize seus filhos (Header e main) em uma coluna.
+              // =======================================================
+            */}
+            <div className="lg:pl-64 transition-all duration-300 flex flex-col h-screen">
                 <Header 
                     onToggleSidebar={() => setSidebarOpen(!isSidebarOpen)} 
                     onOpenCommandPalette={() => {}}
                 />
-                <main className={cn("relative", preferences.uppercaseMode && "uppercase")}>
+                {/* // =======================================================
+                  // CORREÇÃO APLICADA AQUI (PARTE 2)
+                  // 'flex-1' faz com que a tag <main> cresça e ocupe todo o espaço disponível.
+                  // 'overflow-y-auto' cria a barra de rolagem APENAS NESTE container, se necessário.
+                  // =======================================================
+                */}
+                <main className={cn("relative flex-1 overflow-y-auto", preferences.uppercaseMode && "uppercase")}>
                     <Routes>
                         <Route path="/" element={<Navigate to="/painel-de-controle" replace />} />
                         <Route path="/painel-de-controle" element={<DashboardPage />} />
@@ -146,4 +158,3 @@ function App() {
 }
 
 export default App;
-

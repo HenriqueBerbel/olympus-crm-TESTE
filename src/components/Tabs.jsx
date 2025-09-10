@@ -1,9 +1,8 @@
 import React, { createContext, useContext, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
-// --- Utilitário (interno para portabilidade) ---
 function cn(...inputs) {
   return twMerge(clsx(inputs));
 }
@@ -34,8 +33,11 @@ export const Tabs = ({ defaultValue, value, onValueChange, children, className }
 };
 
 export const TabsList = ({ children, className }) => (
-    // [UI] Borda unificada com o tema e position relative para o indicador animado
-    <div className={cn("relative flex items-center border-b border-slate-200 dark:border-slate-800 overflow-x-auto", className)}>
+    /* =======================================================
+       A CORREÇÃO FINAL ESTÁ AQUI
+       A classe 'overflow-x-auto' foi REMOVIDA.
+    ======================================================= */
+    <div className={cn("relative flex items-center border-b border-slate-200 dark:border-slate-800", className)}>
         {children}
     </div>
 );
@@ -50,7 +52,6 @@ export const TabsTrigger = ({ value, children, className }) => {
             onClick={() => setActiveTab(value)}
             className={cn(
                 "relative inline-flex items-center flex-shrink-0 whitespace-nowrap px-4 py-3 text-sm font-semibold transition-colors duration-200",
-                // [UI] Cores de texto unificadas com o tema
                 isActive
                     ? "text-cyan-500 dark:text-cyan-400"
                     : "text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-50",
@@ -58,11 +59,10 @@ export const TabsTrigger = ({ value, children, className }) => {
             )}
         >
             {children}
-            {/* [MOTION] O indicador que desliza suavemente entre as abas */}
             {isActive && (
                 <motion.div 
                     className="absolute bottom-[-1px] left-0 right-0 h-0.5 bg-cyan-500 dark:bg-cyan-400"
-                    layoutId="active-tab-indicator" // A mágica acontece aqui!
+                    layoutId="active-tab-indicator"
                     transition={{ type: 'spring', stiffness: 500, damping: 30 }}
                 />
             )}
@@ -73,8 +73,6 @@ export const TabsTrigger = ({ value, children, className }) => {
 export const TabsContent = ({ value, children, className }) => {
     const { activeTab } = useContext(TabsContext);
     
-    // [MOTION] Usamos AnimatePresence no seu componente pai (ClientDetailsPage) para animar a saída.
-    // Aqui, animamos a entrada do conteúdo.
     return activeTab === value ? (
         <motion.div
             key={value}

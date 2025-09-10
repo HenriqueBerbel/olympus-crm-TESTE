@@ -1,9 +1,18 @@
-/* No seu arquivo src/index.css */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
+  /* =======================================================
+     CORREÇÃO DEFINITIVA PARA SCROLL
+     Isso força o navegador a não ter sua própria barra de rolagem,
+     passando o controle total para os nossos componentes.
+     O bg-color foi movido para cá para garantir consistência.
+     ======================================================= */
+  html, body, #root {
+    @apply h-full overflow-hidden bg-gray-50 dark:bg-[#0D1117];
+  }
+
   :root {
     --background: 240 5% 96%; /* cinza bem claro */
     --foreground: 240 10% 4%; /* cinza quase preto */

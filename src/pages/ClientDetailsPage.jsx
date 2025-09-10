@@ -8,12 +8,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useData } from '../contexts/DataContext';
 import { useConfirm } from '../contexts/ConfirmContext';
 import { useToast } from '../contexts/NotificationContext';
+import { useAuth } from '../contexts/AuthContext'; // <-- IMPORTADO
 import { validateCNPJ, validateCPF } from '../utils';
 
 // Componentes de Visualização
 import GlassPanel from '../components/GlassPanel';
 import Button from '../components/Button';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/Tabs';
+import { Tabs, TabsList, TabsTrigger } from '../components/Tabs';
 import OverviewTab from '../components/clients/OverviewTab';
 import ContractsTab from '../components/clients/ContractsTab';
 import BeneficiariesTab from '../components/clients/BeneficiariesTab';
@@ -31,21 +32,14 @@ import HistoryForm from '../components/forms/HistoryForm';
 import InternalDataForm from '../components/forms/InternalDataForm';
 
 // Ícones
-import { ChevronLeftIcon, DownloadIcon, PencilIcon, Trash2Icon, XIcon, CheckIcon } from '../components/Icons';
+import { ChevronLeftIcon, DownloadIcon, PencilIcon, Trash2Icon, XIcon, CheckIcon, HistoryIcon } from '../components/Icons';
 
-// ========================================================================
-//          *** VARIANTES DE ANIMAÇÃO ***
-// ========================================================================
 const tabContentVariants = {
     hidden: { opacity: 0, y: 10 },
     visible: { opacity: 1, y: 0, transition: { duration: 0.3, ease: 'easeOut' } },
     exit: { opacity: 0, y: -10, transition: { duration: 0.2, ease: 'easeIn' } }
 };
 
-
-// ========================================================================
-//          *** PÁGINA DE DETALHES DO CLIENTE ***
-// ========================================================================
 const ClientDetailsPage = ({ client: initialClient, onBack }) => {
     // Estados
     const [isEditing, setIsEditing] = useState(false);
@@ -60,6 +54,7 @@ const ClientDetailsPage = ({ client: initialClient, onBack }) => {
 
     // Hooks
     const { updateClient, deleteClient } = useData();
+    const { user } = useAuth(); // <-- OBTENDO O USUÁRIO
     const confirm = useConfirm();
     const { toast } = useToast();
     const storage = getStorage();
@@ -91,6 +86,25 @@ const ClientDetailsPage = ({ client: initialClient, onBack }) => {
     }, []);
     const setDirectFormData = useCallback((newState) => { setFormData(newState); }, []);
 
+    // =======================================================
+    // LÓGICA DO HISTÓRICO CENTRALIZADA AQUI
+    // =======================================================
+    const handleAddObservation = (observationText) => {
+        if (!observationText.trim()) return;
+
+        const observationToAdd = {
+            text: observationText,
+            authorName: user?.name || 'Sistema',
+            authorId: user?.uid || null, // Usar user.uid que é o ID do Firebase Auth
+            timestamp: new Date().toISOString(),
+        };
+        
+        setFormData(prev => ({
+            ...prev,
+            observations: [observationToAdd, ...(prev.observations || [])]
+        }));
+    };
+
     const validateForm = () => {
         const newErrors = {};
         const { general } = formData;
@@ -111,19 +125,25 @@ const ClientDetailsPage = ({ client: initialClient, onBack }) => {
         }
         setIsSaving(true);
         try {
-            const { id, ...dataToSave } = formData;
+            const dataToSave = { ...formData };
+            delete dataToSave.id;
+
             dataToSave.sortName = (dataToSave.general.companyName || dataToSave.general.holderName || '').toLowerCase();
-            await updateClient(id, dataToSave);
+            
+            await updateClient(formData.id, dataToSave);
+            
             setClient(formData);
             setIsEditing(false);
+            toast({ title: "Cliente Salvo!", description: "As alterações foram salvas com sucesso.", variant: 'success' });
+
         } catch (error) {
+            console.error("ERRO DO FIREBASE:", error);
             toast({ title: "Erro ao Salvar", description: error.message, variant: "destructive" });
         } finally {
             setIsSaving(false);
         }
     };
     
-    // [CÓDIGO RESTAURADO]
     const handleDelete = async () => {
         const clientName = client.general?.companyName || client.general?.holderName;
         try {
@@ -133,7 +153,6 @@ const ClientDetailsPage = ({ client: initialClient, onBack }) => {
         } catch (e) { /* Cancelado pelo usuário */ }
     };
 
-    // [CÓDIGO RESTAURADO]
     const handleFileUpload = async (file) => {
         if (!file) return;
         setIsUploading(true);
@@ -143,7 +162,7 @@ const ClientDetailsPage = ({ client: initialClient, onBack }) => {
             const downloadURL = await getDownloadURL(snapshot.ref);
             const newDocument = { name: file.name, url: downloadURL, path: snapshot.metadata.fullPath, uploadedAt: new Date().toISOString() };
             setFormData(prev => ({ ...prev, documents: [...(prev.documents || []), newDocument] }));
-            toast({ title: "Sucesso!", description: `Arquivo ${file.name} enviado. Lembre-se de salvar o cliente para confirmar.` });
+            toast({ title: "Sucesso!", description: `Arquivo ${file.name} enviado. Lembre-se de salvar.` });
         } catch (error) {
             toast({ title: "Erro no Upload", description: error.message, variant: "destructive" });
         } finally {
@@ -151,18 +170,16 @@ const ClientDetailsPage = ({ client: initialClient, onBack }) => {
         }
     };
 
-    // [CÓDIGO RESTAURADO]
     const handleFileDelete = async (fileToDelete) => {
         try {
             await confirm({ title: `Excluir ${fileToDelete.name}?` });
             const fileRef = ref(storage, fileToDelete.path);
             await deleteObject(fileRef);
             setFormData(prev => ({ ...prev, documents: (prev.documents || []).filter(doc => doc.url !== fileToDelete.url) }));
-            toast({ title: "Arquivo removido", description: `As alterações serão salvas ao confirmar o formulário.` });
+            toast({ title: "Arquivo Removido", description: `As alterações serão salvas ao confirmar.` });
         } catch (e) { /* Ação cancelada */ }
     };
 
-    // [CÓDIGO RESTAURADO]
     const handleGeneratePdf = async () => {
         if (isEditing) {
             toast({ title: "Ação inválida", description: "Salve ou cancele as alterações para gerar o PDF.", variant: "warning" });
@@ -203,7 +220,14 @@ const ClientDetailsPage = ({ client: initialClient, onBack }) => {
                         {activeTab === 'contracts' && <ContractsForm formData={formData} setFormData={setDirectFormData} />}
                         {activeTab === 'beneficiaries' && <BeneficiariesForm beneficiaries={formData.beneficiaries} setBeneficiaries={(b) => setFormData(p => ({...p, beneficiaries: b}))} toast={toast} />}
                         {activeTab === 'documents' && <DocumentsForm documents={formData.documents} onFileUpload={handleFileUpload} onFileDelete={handleFileDelete} isUploading={isUploading} />}
-                        {activeTab === 'history' && <HistoryForm observations={formData.observations} setObservations={(o) => setFormData(p => ({...p, observations: o}))} />}
+                        
+                        {activeTab === 'history' && (
+                            <HistoryForm 
+                                observations={formData.observations} 
+                                onAddObservation={handleAddObservation} 
+                            />
+                        )}
+                        
                         {activeTab === 'internal' && <InternalDataForm formData={formData} handleChange={handleChange} />}
                         {activeTab === 'cortex' && <CortexTab client={client} />}
                     </>
@@ -223,11 +247,11 @@ const ClientDetailsPage = ({ client: initialClient, onBack }) => {
     );
 
     return (
-        <div className="p-4 sm:p-6 lg:p-8">
+        <div>
             <motion.header 
                 initial={{ opacity: 0, y: -20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="flex justify-between items-start mb-6 gap-4 flex-wrap"
+                className="sticky top-0 z-10 flex justify-between items-start gap-4 flex-wrap p-4 sm:p-6 lg:p-8 bg-gray-50 dark:bg-[#0D1117] border-b border-gray-200 dark:border-white/10"
             >
                 <div>
                     <button onClick={onBack} className="flex items-center text-sm text-gray-500 hover:text-gray-900 dark:hover:text-white mb-2">
@@ -253,8 +277,13 @@ const ClientDetailsPage = ({ client: initialClient, onBack }) => {
                 </div>
             </motion.header>
             
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.2 }}>
-                <GlassPanel ref={printRef} className="p-6">
+            <motion.div 
+                initial={{ opacity: 0 }} 
+                animate={{ opacity: 1 }} 
+                transition={{ delay: 0.2 }}
+                className="p-4 sm:p-6 lg:p-8"
+            >
+                <GlassPanel ref={printRef} className="p-6 overflow-visible">
                     <Tabs value={activeTab} onValueChange={setActiveTab}>
                         <TabsList>
                             <TabsTrigger value="general">Visão Geral</TabsTrigger>
@@ -266,7 +295,7 @@ const ClientDetailsPage = ({ client: initialClient, onBack }) => {
                             <TabsTrigger value="cortex">Córtex AI</TabsTrigger>
                         </TabsList>
                         
-                        <div className="pt-6">
+                        <div className="pt-6 min-h-[300px]">
                            {renderTabsContent(isEditing)}
                         </div>
                     </Tabs>
@@ -277,3 +306,4 @@ const ClientDetailsPage = ({ client: initialClient, onBack }) => {
 };
 
 export default ClientDetailsPage;
+

@@ -186,7 +186,7 @@ const ClientsListPage = () => {
                             message="Tente ajustar seus filtros ou adicione um novo cliente."
                             icon={<UsersIcon className="w-12 h-12 mb-4 text-gray-400" />}
                             actionText={can('clients', 'create') ? "Adicionar Cliente" : ""}
-                            onAction={can('clients', 'create') ? () => navigate('/clients/new') : undefined}
+                            onAction={can('clients', 'create') ? () => navigate('/clientes/novo') : undefined}
                         />
                     </td>
                 </tr>
@@ -198,7 +198,7 @@ const ClientsListPage = () => {
                 <motion.tr 
                     key={client.id} 
                     className="cursor-pointer" 
-                    onClick={() => navigate(`/clients/${client.id}`)}
+                    onClick={() => navigate(`/clientes/${client.id}`)}
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.3, delay: index * 0.04 }}
@@ -232,10 +232,10 @@ const ClientsListPage = () => {
                     </Button>
                     {can('clients', 'create') && (
                         <>
-                            <Button variant="outline" onClick={() => navigate('/clients/import')}>
+                            <Button variant="outline" onClick={() => navigate('/clientes/import')}>
                                 <UploadCloudIcon className="h-4 w-4 mr-2" />Importar
                             </Button>
-                            <Button onClick={() => navigate('/clients/new')}>
+                            <Button onClick={() => navigate('/clientes/novo')}>
                                 <PlusCircleIcon className="h-5 w-5 mr-2" /> Adicionar Cliente
                             </Button>
                         </>

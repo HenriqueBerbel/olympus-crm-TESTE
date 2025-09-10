@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { useAuth } from '../../contexts/AuthContext';
 import Button from '../Button';
 import { HistoryIcon } from '../Icons';
 import { formatDateTime } from '../../utils';
@@ -11,20 +10,14 @@ const Textarea = (props) => (
     />
 );
 
-// CORREÇÃO: Alterado de "export const" para uma constante simples
-const HistoryForm = ({ observations, setObservations }) => {
+// O componente agora é "burro": recebe 'onAddObservation' e não usa mais 'useAuth' ou 'setObservations'.
+const HistoryForm = ({ observations, onAddObservation }) => {
     const [newObservation, setNewObservation] = useState('');
-    const { user } = useAuth();
 
-    const handleAddObservation = () => {
-        if (!newObservation.trim()) return;
-        const observationToAdd = {
-            text: newObservation,
-            authorName: user?.name || 'Sistema',
-            authorId: user?.id,
-            timestamp: new Date().toISOString(),
-        };
-        setObservations([observationToAdd, ...observations]);
+    const handleAddClick = () => {
+        // 1. Chama a função do componente pai, passando apenas o texto.
+        onAddObservation(newObservation);
+        // 2. Limpa o campo de texto local.
         setNewObservation('');
     };
 
@@ -39,14 +32,14 @@ const HistoryForm = ({ observations, setObservations }) => {
                     rows={4}
                 />
                 <div className="flex justify-end mt-2">
-                    <Button type="button" onClick={handleAddObservation} disabled={!newObservation.trim()}>
+                    <Button type="button" onClick={handleAddClick} disabled={!newObservation.trim()}>
                         Adicionar ao Histórico
                     </Button>
                 </div>
             </div>
             <hr className="my-4 border-gray-200 dark:border-gray-700" />
             <h3 className="text-lg font-semibold">Histórico de Observações</h3>
-            <div className="space-y-3 max-h-[40vh] overflow-y-auto pr-2">
+            <div className="space-y-3 pr-2">
                 {(observations || []).length === 0 ? (
                     <p className="text-gray-500 text-center py-8">Nenhum histórico de observações.</p>
                 ) : (
@@ -66,3 +59,4 @@ const HistoryForm = ({ observations, setObservations }) => {
 };
 
 export default HistoryForm;
+
